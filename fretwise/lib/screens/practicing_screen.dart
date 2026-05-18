@@ -31,7 +31,8 @@ class _PracticingScreenState extends State<PracticingScreen> {
   bool _videoPlaying = false;
   bool _recording = false;
   String? _activePopup; // 'tuner' | 'metronome' | null
-  bool _showStrumModal = true;
+  static bool _strumModalDismissed = false;
+  bool _showStrumModal = !_strumModalDismissed;
 
   // Metronome
   int _metroBpm = 80;
@@ -52,6 +53,11 @@ class _PracticingScreenState extends State<PracticingScreen> {
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_running && mounted) setState(() => _seconds++);
     });
+  }
+
+  void _dismissStrumModal() {
+    _strumModalDismissed = true;
+    setState(() => _showStrumModal = false);
   }
 
   @override
@@ -428,7 +434,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
                           SizedBox(
                             width: double.infinity,
                             child: TextButton(
-                              onPressed: () => setState(() => _showStrumModal = false),
+                              onPressed: _dismissStrumModal,
                               child: Text("Don't show again",
                                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: t.textMuted)),
                             ),

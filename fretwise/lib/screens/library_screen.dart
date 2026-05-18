@@ -18,7 +18,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Set<int> _favorites = {0, 2};
   bool _filterFavs = false;
   bool _filterArchived = false;
-  String _sortBy = 'recent';
+  String _sortBy = 'date';
+  bool _sortAsc = false;
   bool _showSort = false;
   bool _showAddModal = false;
   final Set<String> _archived = {};
@@ -56,14 +57,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     all.sort((a, b) {
+      int cmp;
       switch (_sortBy) {
-        case 'recent': return a.lastPracticed.compareTo(b.lastPracticed);
-        case 'earliest': return b.lastPracticed.compareTo(a.lastPracticed);
-        case 'least': return a.progress.compareTo(b.progress);
-        case 'title': return a.title.compareTo(b.title);
-        case 'artist': return a.artist.compareTo(b.artist);
-        default: return 0;
+        case 'date': cmp = a.lastPracticed.compareTo(b.lastPracticed); break;
+        case 'progress': cmp = a.progress.compareTo(b.progress); break;
+        case 'title': cmp = a.title.compareTo(b.title); break;
+        case 'artist': cmp = a.artist.compareTo(b.artist); break;
+        default: cmp = 0;
       }
+      return _sortAsc ? cmp : -cmp;
     });
     return all;
   }
@@ -88,6 +90,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _titleCtrl.dispose();
     _artistCtrl.dispose();
     super.dispose();
+  }
+
+  String _sortDirectionLabel(String key) {
+    switch (key) {
+      case 'date': return _sortAsc ? 'Oldest first' : 'Newest first';
+      case 'progress': return _sortAsc ? 'Least → Most' : 'Most → Least';
+      case 'title':
+      case 'artist': return _sortAsc ? 'A → Z' : 'Z → A';
+      default: return '';
+    }
   }
 
   @override
@@ -203,14 +215,20 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         child: Column(
                           children: [
                             for (final opt in [
-                              ('recent', 'Latest practiced'),
-                              ('earliest', 'Earliest practiced'),
-                              ('least', 'Least practiced'),
-                              ('title', 'Song title'),
+                              ('date', 'Date Practiced'),
+                              ('progress', 'Progress'),
+                              ('title', 'Title'),
                               ('artist', 'Artist'),
                             ])
                               GestureDetector(
-                                onTap: () => setState(() { _sortBy = opt.$1; _showSort = false; }),
+                                onTap: () => setState(() {
+                                  if (_sortBy == opt.$1) {
+                                    _sortAsc = !_sortAsc;
+                                  } else {
+                                    _sortBy = opt.$1;
+                                    _sortAsc = opt.$1 == 'title' || opt.$1 == 'artist';
+                                  }
+                                }),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
                                   decoration: BoxDecoration(
@@ -220,14 +238,29 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                   child: Row(
                                     children: [
                                       Expanded(
-                                        child: Text(opt.$2,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: _sortBy == opt.$1 ? t.accent : t.text,
-                                              fontWeight: _sortBy == opt.$1 ? FontWeight.w700 : FontWeight.w400,
-                                            )),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(opt.$2,
+                                                style: TextStyle(
+                                                  fontSize: 14,
+                                                  color: _sortBy == opt.$1 ? t.accent : t.text,
+                                                  fontWeight: _sortBy == opt.$1 ? FontWeight.w700 : FontWeight.w400,
+                                                )),
+                                            if (_sortBy == opt.$1)
+                                              Text(
+                                                _sortDirectionLabel(opt.$1),
+                                                style: TextStyle(fontSize: 11, color: t.accent),
+                                              ),
+                                          ],
+                                        ),
                                       ),
-                                      if (_sortBy == opt.$1) Icon(Icons.check, size: 16, color: t.accent),
+                                      if (_sortBy == opt.$1)
+                                        Icon(
+                                          _sortAsc ? Icons.arrow_upward : Icons.arrow_downward,
+                                          size: 16,
+                                          color: t.accent,
+                                        ),
                                     ],
                                   ),
                                 ),
@@ -254,6 +287,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           ),
                         for (final s in songs) ...[
                           _SongCard(
+                            key: ValueKey(s.title),
                             song: s,
                             t: t,
                             isFav: Song.library.contains(s) && _favorites.contains(Song.library.indexOf(s)),
@@ -455,6 +489,7 @@ class _SongCard extends StatefulWidget {
   final VoidCallback? onUnarchive;
 
   const _SongCard({
+    super.key,
     required this.song,
     required this.t,
     required this.isFav,
@@ -473,13 +508,14 @@ class _SongCardState extends State<_SongCard> {
   double _offset = 0;
   double? _startX;
   bool _revealed = false;
+  bool _pointerMoved = false;
 
   AppTheme get t => widget.t;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: widget.song.progress > 0 ? 90 : 70,
+      height: widget.song.progress > 0 ? 120 : 70,
       child: Stack(
         children: [
           // Archive action behind
@@ -512,7 +548,10 @@ class _SongCardState extends State<_SongCard> {
           AnimatedContainer(
             duration: _startX != null ? Duration.zero : const Duration(milliseconds: 200),
             transform: Matrix4.translationValues(_offset, 0, 0),
-            child: GestureDetector(
+            child: Listener(
+              onPointerDown: (_) => _pointerMoved = false,
+              onPointerMove: (e) { if (e.delta.dy.abs() > 2) _pointerMoved = true; },
+              child: GestureDetector(
               onHorizontalDragStart: (d) => setState(() => _startX = d.globalPosition.dx),
               onHorizontalDragUpdate: (d) {
                 if (_startX == null) return;
@@ -532,6 +571,7 @@ class _SongCardState extends State<_SongCard> {
                 });
               },
               onTap: () {
+                if (_pointerMoved) return;
                 if (_revealed) {
                   setState(() { _offset = 0; _revealed = false; });
                 } else {
@@ -547,6 +587,7 @@ class _SongCardState extends State<_SongCard> {
                 ),
                 padding: const EdgeInsets.all(16),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Row(
                       children: [
@@ -616,6 +657,7 @@ class _SongCardState extends State<_SongCard> {
                 ),
               ),
             ),
+          ),
           ),
         ],
       ),

@@ -215,37 +215,33 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: widget.onOpenAI,
-                        icon: const Icon(Icons.chat_bubble_outline, size: 16, color: Colors.white),
-                        label: const Text('Ask AI Coach about this session',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          padding: const EdgeInsets.symmetric(vertical: 13),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        ).copyWith(
-                          backgroundColor: WidgetStateProperty.all(Colors.transparent),
-                          elevation: WidgetStateProperty.all(0),
-                          overlayColor: WidgetStateProperty.all(Colors.white.withValues(alpha: 0.1)),
-                        ),
-                      ),
-                    ),
-                    // Use a separate container for gradient
-                    Transform.translate(
-                      offset: const Offset(0, -44),
-                      child: IgnorePointer(
-                        child: Container(
-                          height: 44,
-                          decoration: BoxDecoration(
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF1A7A5E), Color(0xFF2EAD85)],
-                              begin: Alignment.centerLeft,
-                              end: Alignment.centerRight,
+                      height: 46,
+                      child: Stack(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF1A7A5E), Color(0xFF2EAD85)],
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                              ),
+                              borderRadius: BorderRadius.circular(14),
                             ),
-                            borderRadius: BorderRadius.circular(14),
                           ),
-                        ),
+                          ElevatedButton.icon(
+                            onPressed: widget.onOpenAI,
+                            icon: const Icon(Icons.chat_bubble_outline, size: 16, color: Colors.white),
+                            label: const Text('Ask AI Coach about this session',
+                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.transparent,
+                              shadowColor: Colors.transparent,
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              elevation: 0,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -254,7 +250,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
               // Nav buttons
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, -20, 20, 0),
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
                 child: Column(
                   children: [
                     SizedBox(
