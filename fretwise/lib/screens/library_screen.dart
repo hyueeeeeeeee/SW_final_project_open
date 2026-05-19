@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../models/song.dart';
@@ -7,8 +8,18 @@ import '../widgets/progress_bar.dart';
 class LibraryScreen extends StatefulWidget {
   final AppTheme t;
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
+  final List<Song> extraSongs;
+  final Set<String> removedLibrarySongs;
+  final void Function(Song) onAddSong;
 
-  const LibraryScreen({super.key, required this.t, required this.navigate});
+  const LibraryScreen({
+    super.key,
+    required this.t,
+    required this.navigate,
+    required this.extraSongs,
+    required this.removedLibrarySongs,
+    required this.onAddSong,
+  });
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -22,26 +33,29 @@ class _LibraryScreenState extends State<LibraryScreen> {
   bool _sortAsc = false;
   bool _showSort = false;
   bool _showAddModal = false;
+  String? _addError;
   final Set<String> _archived = {};
-  final List<Song> _extraSongs = [];
   final _titleCtrl = TextEditingController();
   final _artistCtrl = TextEditingController();
   String _searchQuery = '';
+  final Map<String, GlobalKey> _cardKeys = {};
+  String? _highlightedSong;
 
   AppTheme get t => widget.t;
 
   List<Song> get _allSongs {
-    final base = Song.library;
-    final all = [...base, ..._extraSongs];
+    final base = Song.library.where((s) => !widget.removedLibrarySongs.contains(s.title));
+    final all = [...base, ...widget.extraSongs];
     return all.where((s) => !_archived.contains(s.title)).toList();
   }
 
   List<Song> get _visibleSongs {
+    final effectiveBase = Song.library.where((s) => !widget.removedLibrarySongs.contains(s.title));
     List<Song> all;
     if (_filterArchived) {
-      all = [...Song.library, ..._extraSongs].where((s) => _archived.contains(s.title)).toList();
+      all = [...effectiveBase, ...widget.extraSongs].where((s) => _archived.contains(s.title)).toList();
     } else {
-      all = [...Song.library, ..._extraSongs].where((s) => !_archived.contains(s.title)).toList();
+      all = [...effectiveBase, ...widget.extraSongs].where((s) => !_archived.contains(s.title)).toList();
     }
 
     if (_searchQuery.isNotEmpty) {
@@ -70,19 +84,61 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return all;
   }
 
+  void _scrollToSong(String title) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final key = _cardKeys[title];
+      if (key?.currentContext != null) {
+        Scrollable.ensureVisible(
+          key!.currentContext!,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeInOut,
+          alignment: 0.1,
+        ).then((_) {
+          if (!mounted) return;
+          setState(() => _highlightedSong = title);
+          Future.delayed(const Duration(milliseconds: 1400), () {
+            if (mounted) setState(() => _highlightedSong = null);
+          });
+        });
+      }
+    });
+  }
+
   void _addSong() {
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) return;
+    final effectiveBase = Song.library.where((s) => !widget.removedLibrarySongs.contains(s.title));
+    final all = [...effectiveBase, ...widget.extraSongs];
+    final duplicate = all.where((s) => s.title.toLowerCase() == title.toLowerCase()).firstOrNull;
+    if (duplicate != null) {
+      setState(() {
+        _titleCtrl.clear();
+        _artistCtrl.clear();
+        _addError = null;
+        _showAddModal = false;
+      });
+      _scrollToSong(duplicate.title);
+      return;
+    }
+    final rng = Random();
+    final mins = 2 + rng.nextInt(5);
+    final secs = rng.nextInt(60);
+    final duration = '$mins:${secs.toString().padLeft(2, '0')}';
+    final progress = 5 + rng.nextInt(91);
+    widget.onAddSong(Song(
+      title: title,
+      artist: _artistCtrl.text.trim().isEmpty ? 'Unknown Artist' : _artistCtrl.text.trim(),
+      seed: Song.library.length + widget.extraSongs.length,
+      duration: duration,
+      progress: progress,
+    ));
     setState(() {
-      _extraSongs.add(Song(
-        title: title,
-        artist: _artistCtrl.text.trim().isEmpty ? 'Unknown Artist' : _artistCtrl.text.trim(),
-        seed: Song.library.length + _extraSongs.length,
-      ));
       _titleCtrl.clear();
       _artistCtrl.clear();
+      _addError = null;
       _showAddModal = false;
     });
+    _scrollToSong(title);
   }
 
   @override
@@ -287,11 +343,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           ),
                         for (final s in songs) ...[
                           _SongCard(
-                            key: ValueKey(s.title),
+                            key: _cardKeys.putIfAbsent(s.title, () => GlobalKey()),
                             song: s,
                             t: t,
                             isFav: Song.library.contains(s) && _favorites.contains(Song.library.indexOf(s)),
                             isArchived: _filterArchived,
+                            isHighlighted: _highlightedSong == s.title,
                             onTap: () => widget.navigate('practicing', props: {
                               'title': s.title,
                               'artist': s.artist,
@@ -349,10 +406,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 decoration: BoxDecoration(
                   color: t.accent,
                   borderRadius: BorderRadius.circular(28),
-                  boxShadow: [
-                    BoxShadow(color: t.accent.withValues(alpha: 0.55), blurRadius: 20),
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 8),
-                  ],
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.14), blurRadius: 8)],
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
                 child: Row(
@@ -370,7 +424,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         // Add Song Modal
         if (_showAddModal)
           GestureDetector(
-            onTap: () => setState(() => _showAddModal = false),
+            onTap: () => setState(() { _showAddModal = false; _addError = null; }),
             child: Container(
               color: Colors.black.withValues(alpha: 0.4),
               alignment: Alignment.bottomCenter,
@@ -397,7 +451,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       Text('Add song to library',
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: t.text)),
                       const SizedBox(height: 18),
-                      _ModalField(label: 'SONG TITLE', hint: 'e.g. Stairway to Heaven', controller: _titleCtrl, t: t),
+                      _ModalField(
+                        label: 'SONG TITLE',
+                        hint: 'e.g. Stairway to Heaven',
+                        controller: _titleCtrl,
+                        t: t,
+                        onChanged: (_) { if (_addError != null) setState(() => _addError = null); },
+                      ),
+                      if (_addError != null) ...[
+                        const SizedBox(height: 6),
+                        Text(_addError!, style: TextStyle(fontSize: 12, color: AppColors.red)),
+                      ],
                       const SizedBox(height: 12),
                       _ModalField(
                         label: 'ARTIST',
@@ -483,6 +547,7 @@ class _SongCard extends StatefulWidget {
   final AppTheme t;
   final bool isFav;
   final bool isArchived;
+  final bool isHighlighted;
   final VoidCallback onTap;
   final VoidCallback? onFavToggle;
   final VoidCallback? onArchive;
@@ -495,6 +560,7 @@ class _SongCard extends StatefulWidget {
     required this.isFav,
     required this.isArchived,
     required this.onTap,
+    this.isHighlighted = false,
     this.onFavToggle,
     this.onArchive,
     this.onUnarchive,
@@ -504,7 +570,9 @@ class _SongCard extends StatefulWidget {
   State<_SongCard> createState() => _SongCardState();
 }
 
-class _SongCardState extends State<_SongCard> {
+class _SongCardState extends State<_SongCard> with SingleTickerProviderStateMixin {
+  late final AnimationController _glowCtrl;
+  late final Animation<double> _glowAnim;
   double _offset = 0;
   double? _startX;
   bool _revealed = false;
@@ -513,9 +581,37 @@ class _SongCardState extends State<_SongCard> {
   AppTheme get t => widget.t;
 
   @override
+  void initState() {
+    super.initState();
+    _glowCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    _glowAnim = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 25),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.0), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 35),
+    ]).animate(_glowCtrl);
+  }
+
+  @override
+  void didUpdateWidget(_SongCard old) {
+    super.didUpdateWidget(old);
+    if (widget.isHighlighted && !old.isHighlighted) {
+      _glowCtrl.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _glowCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: widget.song.progress > 0 ? 120 : 70,
+      height: widget.song.progress > 0 ? 120 : 80,
       child: Stack(
         children: [
           // Archive action behind
@@ -578,12 +674,23 @@ class _SongCardState extends State<_SongCard> {
                   widget.onTap();
                 }
               },
-              child: Container(
+              child: AnimatedBuilder(
+                animation: _glowAnim,
+                builder: (context, child) => Container(
                 decoration: BoxDecoration(
                   color: t.surface,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: t.border),
-                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                  border: Border.all(
+                    color: Color.lerp(t.border, t.accent, _glowAnim.value)!,
+                  ),
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4),
+                    BoxShadow(
+                      color: t.accent.withValues(alpha: 0.45 * _glowAnim.value),
+                      blurRadius: 18 * _glowAnim.value,
+                      spreadRadius: 2 * _glowAnim.value,
+                    ),
+                  ],
                 ),
                 padding: const EdgeInsets.all(16),
                 child: Column(
@@ -659,6 +766,7 @@ class _SongCardState extends State<_SongCard> {
             ),
           ),
           ),
+        ),
         ],
       ),
     );
@@ -671,6 +779,7 @@ class _ModalField extends StatelessWidget {
   final TextEditingController controller;
   final AppTheme t;
   final VoidCallback? onSubmit;
+  final ValueChanged<String>? onChanged;
 
   const _ModalField({
     required this.label,
@@ -678,6 +787,7 @@ class _ModalField extends StatelessWidget {
     required this.controller,
     required this.t,
     this.onSubmit,
+    this.onChanged,
   });
 
   @override
@@ -697,6 +807,7 @@ class _ModalField extends StatelessWidget {
           controller: controller,
           style: TextStyle(fontSize: 15, color: t.text),
           onSubmitted: (_) => onSubmit?.call(),
+          onChanged: onChanged,
           decoration: InputDecoration(
             hintText: hint,
             hintStyle: TextStyle(color: t.textMuted),

@@ -8,6 +8,7 @@ class SessionCompleteScreen extends StatefulWidget {
   final String artist;
   final int duration;
   final VoidCallback onOpenAI;
+  final void Function(String note)? onSaveNote;
 
   const SessionCompleteScreen({
     super.key,
@@ -17,6 +18,7 @@ class SessionCompleteScreen extends StatefulWidget {
     required this.artist,
     required this.duration,
     required this.onOpenAI,
+    this.onSaveNote,
   });
 
   @override
@@ -236,6 +238,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
                               shadowColor: Colors.transparent,
+                              minimumSize: const Size(double.infinity, 46),
                               padding: const EdgeInsets.symmetric(vertical: 13),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                               elevation: 0,
@@ -256,7 +259,10 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () => widget.navigate('home'),
+                        onPressed: () {
+                          widget.onSaveNote?.call(_feedbackCtrl.text.trim());
+                          widget.navigate('home');
+                        },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: t.accent,
                           padding: const EdgeInsets.symmetric(vertical: 15),
@@ -271,7 +277,10 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: () => widget.navigate('library'),
+                        onPressed: () {
+                          widget.onSaveNote?.call(_feedbackCtrl.text.trim());
+                          widget.navigate('library');
+                        },
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: t.border, width: 1.5),
                           padding: const EdgeInsets.symmetric(vertical: 15),

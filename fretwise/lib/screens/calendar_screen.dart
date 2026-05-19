@@ -37,8 +37,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final isToday = day == _today.day && _month == _today.month && _year == _today.year;
     final isPast = day < _today.day || _month < _today.month || _year < _today.year;
     if (isToday) return t.accent;
-    if (isPast && _practiced.contains(day)) return AppColors.green;
-    if (isPast && _missed.contains(day)) return AppColors.red;
+    if (isPast && _practiced.contains(day)) return const Color(0xFF7A9E7A);
+    if (isPast && _missed.contains(day)) return const Color(0xFFB07868);
     if (!isPast && _upcoming.contains(day - _today.day)) return t.accent;
     return Colors.transparent;
   }
@@ -47,8 +47,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final isToday = day == _today.day && _month == _today.month && _year == _today.year;
     final isPast = day < _today.day;
     if (isToday) return Colors.white;
-    if (isPast && _practiced.contains(day)) return AppColors.green;
-    if (isPast && _missed.contains(day)) return AppColors.red;
+    if (isPast && _practiced.contains(day)) return Colors.white;
+    if (isPast && _missed.contains(day)) return Colors.white;
     if (!isPast && _upcoming.contains(day - _today.day)) return t.accent;
     return day > _today.day ? t.textMuted : t.text;
   }
@@ -97,17 +97,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
                         ),
                         padding: const EdgeInsets.all(20),
-                        child: Stack(
-                          children: [
-                            Positioned(
-                              right: -24,
-                              top: -24,
-                              child: Container(
-                                width: 100, height: 100,
-                                decoration: BoxDecoration(shape: BoxShape.circle, color: t.accentSoft),
-                              ),
-                            ),
-                            Column(
+                        child: Column(
                               children: [
                                 Row(
                                   children: [
@@ -147,8 +137,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 ),
                               ],
                             ),
-                          ],
-                        ),
                       ),
                     ),
                   ],
@@ -214,8 +202,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         spacing: 14,
                         runSpacing: 6,
                         children: [
-                          _LegendDot(color: AppColors.green, label: 'Practiced', soft: false, t: t),
-                          _LegendDot(color: AppColors.red, label: 'Missed', soft: false, t: t),
+                          _LegendDot(color: const Color(0xFF7A9E7A), label: 'Practiced', soft: false, t: t),
+                          _LegendDot(color: const Color(0xFFB07868), label: 'Missed', soft: false, t: t),
                           _LegendDot(color: t.accent, label: 'Today', soft: false, t: t),
                           _LegendDot(color: t.accentMid, label: 'Upcoming', soft: true, t: t),
                         ],

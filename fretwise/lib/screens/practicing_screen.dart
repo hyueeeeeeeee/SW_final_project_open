@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:mic_stream/mic_stream.dart';
+import 'package:pitch_detector_dart/pitch_detector.dart';
 import '../theme.dart';
 
 class PracticingScreen extends StatefulWidget {
@@ -39,10 +43,21 @@ class _PracticingScreenState extends State<PracticingScreen> {
   bool _metroRunning = false;
   int _metroBeat = 0;
   Timer? _metroTimer;
+  _MetronomeAudio? _metroAudio;
 
-  // Tuner
-  double _tunerNeedle = 0;
-  Timer? _tunerTimer;
+  // Tuner — real microphone pitch detection
+  StreamSubscription<Uint8List>? _micSub;
+  late final PitchDetector _pitchDetector;
+  final List<int> _rawBuffer = [];
+  double _tunerFreq = 0;
+  String _tunerNote = '--';
+  int _tunerCents = 0;
+  int _tunerOctave = 4;
+  bool _tunerPitched = false;
+  bool _tunerPermDenied = false;
+  bool _detecting = false;
+  int _lastDetectionMs = 0;
+
   Timer? _sessionTimer;
 
   AppTheme get t => widget.t;
@@ -50,9 +65,12 @@ class _PracticingScreenState extends State<PracticingScreen> {
   @override
   void initState() {
     super.initState();
+    _pitchDetector = PitchDetector(audioSampleRate: 44100.0, bufferSize: 4096);
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_running && mounted) setState(() => _seconds++);
     });
+    _metroAudio = _MetronomeAudio();
+    _metroAudio!.init();
   }
 
   void _dismissStrumModal() {
@@ -64,15 +82,25 @@ class _PracticingScreenState extends State<PracticingScreen> {
   void dispose() {
     _sessionTimer?.cancel();
     _metroTimer?.cancel();
-    _tunerTimer?.cancel();
+    _micSub?.cancel();
+    _metroAudio?.release();
     super.dispose();
   }
 
   void _startMetronome() {
     _metroTimer?.cancel();
+    _metroBeat = 0;
+    _metroAudio?.playAccent();
     final ms = (60000 / _metroBpm).round();
     _metroTimer = Timer.periodic(Duration(milliseconds: ms), (_) {
-      if (mounted) setState(() => _metroBeat = (_metroBeat + 1) % 4);
+      if (!mounted) return;
+      final next = (_metroBeat + 1) % 4;
+      setState(() => _metroBeat = next);
+      if (next == 0) {
+        _metroAudio?.playAccent();
+      } else {
+        _metroAudio?.playTick();
+      }
     });
   }
 
@@ -81,47 +109,120 @@ class _PracticingScreenState extends State<PracticingScreen> {
     _metroTimer = null;
   }
 
-  void _startTuner() {
-    _tunerTimer = Timer.periodic(const Duration(milliseconds: 80), (_) {
-      if (mounted) {
-        setState(() => _tunerNeedle = sin(DateTime.now().millisecondsSinceEpoch / 800) * 18 +
-            (Random().nextDouble() - 0.5) * 6);
-      }
+  Future<void> _startTuner() async {
+    if (!mounted) return;
+    setState(() {
+      _tunerPermDenied = false;
+      _tunerPitched = false;
+      _tunerNote = '--';
     });
+    try {
+      // v0.6.x API: returns Future<Stream<Uint8List>?>
+      final stream = await MicStream.microphone(
+        sampleRate: 44100,
+        audioFormat: AudioFormat.ENCODING_PCM_16BIT,
+      );
+      if (stream == null) {
+        if (mounted) setState(() => _tunerPermDenied = true);
+        return;
+      }
+      _micSub = stream.listen(
+        (chunk) {
+          _rawBuffer.addAll(chunk);
+          // Cap to ~0.5 s of audio (44100 Hz × 2 bytes/sample = 88200 bytes)
+          if (_rawBuffer.length > 88200) {
+            _rawBuffer.removeRange(0, _rawBuffer.length - 88200);
+          }
+          final nowMs = DateTime.now().millisecondsSinceEpoch;
+          // Throttle detection to once per 150 ms; need ≥4096 bytes (2048 Int16 samples)
+          if (nowMs - _lastDetectionMs >= 150 && _rawBuffer.length >= 4096) {
+            _lastDetectionMs = nowMs;
+            final bytes = Uint8List.fromList(_rawBuffer.sublist(0, 4096));
+            _rawBuffer.removeRange(0, 4096);
+            _processPitch(bytes);
+          }
+        },
+        onError: (e) {
+          debugPrint('Tuner stream error: $e');
+          if (mounted) setState(() => _tunerPermDenied = true);
+        },
+      );
+    } catch (e) {
+      debugPrint('Tuner mic error: $e');
+      if (mounted) setState(() => _tunerPermDenied = true);
+    }
+  }
+
+  Future<void> _processPitch(Uint8List bytes) async {
+    if (_detecting) return;
+    _detecting = true;
+    try {
+      // Proper little-endian Int16 → float conversion (library's built-in is big-endian)
+      final bd = bytes.buffer.asByteData();
+      final floats = <double>[
+        for (var i = 0; i + 1 < bytes.length; i += 2)
+          bd.getInt16(i, Endian.little) / 32768.0,
+      ];
+      if (floats.length < _pitchDetector.bufferSize) return;
+      final result = await _pitchDetector.getPitchFromFloatBuffer(floats);
+      if (!mounted) return;
+      if (result.pitched && result.pitch > 60 && result.pitch < 1500) {
+        final (note, octave, cents) = _freqToNote(result.pitch);
+        setState(() {
+          _tunerPitched = true;
+          _tunerFreq = result.pitch;
+          _tunerNote = note;
+          _tunerOctave = octave;
+          _tunerCents = cents;
+        });
+      } else {
+        setState(() => _tunerPitched = false);
+      }
+    } catch (e) {
+      debugPrint('Pitch detection error: $e');
+    } finally {
+      _detecting = false;
+    }
+  }
+
+  /// Maps a frequency in Hz to the nearest chromatic note, octave, and cents deviation.
+  (String, int, int) _freqToNote(double freq) {
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    // A4 = 440 Hz = MIDI 69
+    final midiExact = 12.0 * log(freq / 440.0) / log(2.0) + 69.0;
+    final midiRound = midiExact.round();
+    final cents = ((midiExact - midiRound) * 100).round().clamp(-50, 50);
+    final noteIdx = ((midiRound % 12) + 12) % 12;
+    final octave = (midiRound ~/ 12) - 1;
+    return (names[noteIdx], octave, cents);
   }
 
   void _stopTuner() {
-    _tunerTimer?.cancel();
-    _tunerTimer = null;
+    _micSub?.cancel();
+    _micSub = null;
+    _rawBuffer.clear();
+    if (mounted) setState(() { _tunerPitched = false; _tunerNote = '--'; });
   }
 
   void _handleToolTap(String id) {
-    setState(() {
-      if (id == 'record') {
-        _recording = !_recording;
-        return;
-      }
-      if (_activePopup == id) {
-        _activePopup = null;
-        if (id == 'metronome') { _metroRunning = false; _stopMetronome(); }
-        if (id == 'tuner') _stopTuner();
-      } else {
-        if (_activePopup == 'metronome') { _metroRunning = false; _stopMetronome(); }
-        if (_activePopup == 'tuner') _stopTuner();
-        _activePopup = id;
-        if (id == 'tuner') _startTuner();
-      }
-    });
+    if (id == 'record') {
+      setState(() => _recording = !_recording);
+      return;
+    }
+    if (_activePopup == id) {
+      setState(() => _activePopup = null);
+      if (id == 'metronome') { _metroRunning = false; _stopMetronome(); }
+      if (id == 'tuner') _stopTuner();
+    } else {
+      if (_activePopup == 'metronome') { _metroRunning = false; _stopMetronome(); }
+      if (_activePopup == 'tuner') _stopTuner();
+      setState(() => _activePopup = id);
+      if (id == 'tuner') _startTuner();
+    }
   }
 
   String _fmt(int s) =>
       '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
-
-  static const _noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-
-  String get _detectedNote => _noteNames[(_tunerNeedle.abs() / 3).round() % 12];
-  int get _cents => (_tunerNeedle * 3.5).round();
-  bool get _inTune => _cents.abs() < 8;
 
   @override
   Widget build(BuildContext context) {
@@ -293,7 +394,17 @@ class _PracticingScreenState extends State<PracticingScreen> {
             if (_activePopup != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                child: _activePopup == 'tuner' ? _TunerPanel(t: t, needle: _tunerNeedle, note: _detectedNote, cents: _cents, inTune: _inTune, onClose: () => _handleToolTap('tuner'))
+                child: _activePopup == 'tuner'
+                    ? _TunerPanel(
+                        t: t,
+                        note: _tunerNote,
+                        octave: _tunerOctave,
+                        freq: _tunerFreq,
+                        cents: _tunerCents,
+                        pitched: _tunerPitched,
+                        permDenied: _tunerPermDenied,
+                        onClose: () => _handleToolTap('tuner'),
+                      )
                     : _MetronomePanel(
                         t: t,
                         bpm: _metroBpm,
@@ -511,23 +622,48 @@ class _ToolButton extends StatelessWidget {
 
 class _TunerPanel extends StatelessWidget {
   final AppTheme t;
-  final double needle;
   final String note;
+  final int octave;
+  final double freq;
   final int cents;
-  final bool inTune;
+  final bool pitched;
+  final bool permDenied;
   final VoidCallback onClose;
 
   const _TunerPanel({
     required this.t,
-    required this.needle,
     required this.note,
+    required this.octave,
+    required this.freq,
     required this.cents,
-    required this.inTune,
+    required this.pitched,
+    required this.permDenied,
     required this.onClose,
   });
 
+  bool get inTune => pitched && cents.abs() <= 8;
+
   @override
   Widget build(BuildContext context) {
+    final noteStr = pitched ? '$note$octave' : '--';
+    final freqStr = pitched ? '${freq.toStringAsFixed(1)} Hz' : '';
+    final String statusStr;
+    final Color statusColor;
+
+    if (permDenied) {
+      statusStr = 'Microphone access denied';
+      statusColor = AppColors.red;
+    } else if (!pitched) {
+      statusStr = 'Play a note...';
+      statusColor = t.textMuted;
+    } else if (inTune) {
+      statusStr = '✓ In tune';
+      statusColor = AppColors.green;
+    } else {
+      statusStr = '${cents > 0 ? "+" : ""}$cents cents';
+      statusColor = t.textSec;
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: t.surface,
@@ -549,18 +685,30 @@ class _TunerPanel extends StatelessWidget {
             ],
           ),
           Text(
-            '${note}4',
-            style: TextStyle(fontSize: 34, fontWeight: FontWeight.w900, color: inTune ? AppColors.green : t.text, letterSpacing: -1, height: 1),
+            noteStr,
+            style: TextStyle(
+              fontSize: 34,
+              fontWeight: FontWeight.w900,
+              color: inTune ? AppColors.green : t.text,
+              letterSpacing: -1,
+              height: 1,
+            ),
           ),
+          if (freqStr.isNotEmpty)
+            Text(freqStr, style: TextStyle(fontSize: 11, color: t.textMuted, fontWeight: FontWeight.w500)),
           Text(
-            inTune ? '✓ In tune' : '${cents > 0 ? "+" : ""}$cents cents',
-            style: TextStyle(fontSize: 12, color: inTune ? AppColors.green : t.textSec, fontWeight: FontWeight.w600),
+            statusStr,
+            style: TextStyle(fontSize: 12, color: statusColor, fontWeight: FontWeight.w600),
           ),
           SizedBox(
             height: 78,
             child: CustomPaint(
               size: const Size(double.infinity, 78),
-              painter: _TunerPainter(needle: needle, inTune: inTune, borderColor: t.border),
+              painter: _TunerPainter(
+                cents: pitched ? cents.toDouble() : 0.0,
+                inTune: inTune,
+                borderColor: t.border,
+              ),
             ),
           ),
         ],
@@ -570,18 +718,17 @@ class _TunerPanel extends StatelessWidget {
 }
 
 class _TunerPainter extends CustomPainter {
-  final double needle;
+  final double cents; // -50..+50
   final bool inTune;
   final Color borderColor;
 
-  _TunerPainter({required this.needle, required this.inTune, required this.borderColor});
+  _TunerPainter({required this.cents, required this.inTune, required this.borderColor});
 
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height - 4;
     const r = 58.0;
-    const scale = sizeScale;
 
     final arcPaint = Paint()
       ..color = borderColor
@@ -601,39 +748,40 @@ class _TunerPainter extends CustomPainter {
       ..strokeWidth = 2.5
       ..strokeCap = StrokeCap.round;
 
-    // Arc
+    // Half-circle arc: from pi (left) sweeping pi radians to 2*pi (right)
     canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r * scale),
+      Rect.fromCircle(center: Offset(cx, cy), radius: r),
       pi, pi, false, arcPaint,
     );
 
-    // Green zone
+    // Green "in tune" zone centred at the top (3π/2), spanning ±8 cents
+    // 8 cents → 8/50 * (π/2) ≈ 0.25 rad on each side
+    const greenHalfSpan = 0.25;
     canvas.drawArc(
-      Rect.fromCircle(center: Offset(cx, cy), radius: r * scale),
-      pi + pi * 0.47,
-      pi * 0.06,
+      Rect.fromCircle(center: Offset(cx, cy), radius: r),
+      3 * pi / 2 - greenHalfSpan,
+      greenHalfSpan * 2,
       false,
       greenPaint,
     );
 
-    // Needle
-    final angle = pi + (needle / 30) * (pi / 2);
-    final nx = cx + (r - 6) * scale * cos(angle);
-    final ny = cy + (r - 6) * scale * sin(angle);
+    // Needle: cents=0 → straight up (3π/2), ±50 → left/right ends
+    final angle = 3 * pi / 2 + (cents.clamp(-50.0, 50.0) / 50.0) * (pi / 2);
+    final nx = cx + (r - 6) * cos(angle);
+    final ny = cy + (r - 6) * sin(angle);
     canvas.drawLine(Offset(cx, cy), Offset(nx, ny), needlePaint);
 
-    // Pivot
+    // Pivot dot
     canvas.drawCircle(
       Offset(cx, cy),
-      4.5 * scale,
+      4.5,
       Paint()..color = inTune ? AppColors.green : AppColors.blue,
     );
   }
 
-  static const sizeScale = 1.0;
-
   @override
-  bool shouldRepaint(_TunerPainter old) => old.needle != needle || old.inTune != inTune;
+  bool shouldRepaint(_TunerPainter old) =>
+      old.cents != cents || old.inTune != inTune;
 }
 
 class _MetronomePanel extends StatelessWidget {
@@ -678,7 +826,6 @@ class _MetronomePanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          // Beat dots
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: List.generate(4, (i) => Padding(
@@ -697,7 +844,6 @@ class _MetronomePanel extends StatelessWidget {
             )),
           ),
           const SizedBox(height: 10),
-          // BPM controls
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -764,5 +910,91 @@ class _MetronomePanel extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _MetronomeAudio {
+  AudioPlayer? _accentPlayer;
+  AudioPlayer? _tickPlayer;
+  Uint8List? _accentWav;
+  Uint8List? _tickWav;
+  bool _ready = false;
+
+  Future<void> init() async {
+    try {
+      _accentWav = _buildWav(freq: 1050, durationMs: 65);
+      _tickWav = _buildWav(freq: 620, durationMs: 40);
+      _accentPlayer = AudioPlayer();
+      _tickPlayer = AudioPlayer();
+      await _accentPlayer!.setPlayerMode(PlayerMode.lowLatency);
+      await _tickPlayer!.setPlayerMode(PlayerMode.lowLatency);
+      await _accentPlayer!.setAudioContext(AudioContext(
+        android: AudioContextAndroid(
+          contentType: AndroidContentType.sonification,
+          usageType: AndroidUsageType.alarm,
+          audioFocus: AndroidAudioFocus.none,
+        ),
+      ));
+      await _tickPlayer!.setAudioContext(AudioContext(
+        android: AudioContextAndroid(
+          contentType: AndroidContentType.sonification,
+          usageType: AndroidUsageType.alarm,
+          audioFocus: AndroidAudioFocus.none,
+        ),
+      ));
+      _ready = true;
+    } catch (e) {
+      debugPrint('MetronomeAudio init: $e');
+    }
+  }
+
+  void playAccent() {
+    if (!_ready) return;
+    _accentPlayer!.play(BytesSource(_accentWav!));
+  }
+
+  void playTick() {
+    if (!_ready) return;
+    _tickPlayer!.play(BytesSource(_tickWav!));
+  }
+
+  void release() {
+    _accentPlayer?.dispose();
+    _tickPlayer?.dispose();
+    _accentPlayer = null;
+    _tickPlayer = null;
+    _ready = false;
+  }
+
+  static Uint8List _buildWav({required int freq, required int durationMs}) {
+    const sr = 44100;
+    final n = (sr * durationMs / 1000).round();
+    final pcm = Int16List(n);
+    for (var i = 0; i < n; i++) {
+      final env = 1.0 - (i / n);
+      pcm[i] = (sin(2 * pi * freq * i / sr) * env * 28000)
+          .round()
+          .clamp(-32768, 32767);
+    }
+    final pcmBytes = pcm.buffer.asUint8List();
+    final wav = ByteData(44 + pcmBytes.length);
+    void ws(int o, String s) {
+      for (var i = 0; i < s.length; i++) {
+        wav.setUint8(o + i, s.codeUnitAt(i));
+      }
+    }
+    ws(0, 'RIFF'); wav.setUint32(4, 36 + pcmBytes.length, Endian.little);
+    ws(8, 'WAVE');
+    ws(12, 'fmt '); wav.setUint32(16, 16, Endian.little);
+    wav.setUint16(20, 1, Endian.little);
+    wav.setUint16(22, 1, Endian.little);
+    wav.setUint32(24, sr, Endian.little);
+    wav.setUint32(28, sr * 2, Endian.little);
+    wav.setUint16(32, 2, Endian.little);
+    wav.setUint16(34, 16, Endian.little);
+    ws(36, 'data'); wav.setUint32(40, pcmBytes.length, Endian.little);
+    final result = wav.buffer.asUint8List();
+    result.setRange(44, 44 + pcmBytes.length, pcmBytes);
+    return result;
   }
 }

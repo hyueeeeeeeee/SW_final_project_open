@@ -56,24 +56,14 @@ class HomeScreen extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
             child: Container(
+              width: double.infinity,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(22),
               ),
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
               child: Stack(
+                alignment: Alignment.topCenter,
                 children: [
-                  Positioned.fill(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(22),
-                        gradient: RadialGradient(
-                          center: Alignment(0, 0.6),
-                          radius: 0.7,
-                          colors: [t.accent.withValues(alpha: 0.094), Colors.transparent],
-                        ),
-                      ),
-                    ),
-                  ),
                   Column(
                     children: [
                       const Text('🔥', style: TextStyle(fontSize: 56)),
@@ -124,21 +114,7 @@ class HomeScreen extends StatelessWidget {
                       ],
                     ),
                     padding: const EdgeInsets.all(20),
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          right: -24,
-                          top: -24,
-                          child: Container(
-                            width: 100,
-                            height: 100,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: t.accentSoft,
-                            ),
-                          ),
-                        ),
-                        Column(
+                    child: Column(
                           children: [
                             Row(
                               children: [
@@ -202,8 +178,6 @@ class HomeScreen extends StatelessWidget {
                             ),
                           ],
                         ),
-                      ],
-                    ),
                   ),
                 ),
               ],

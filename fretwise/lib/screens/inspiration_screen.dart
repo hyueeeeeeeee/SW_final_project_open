@@ -1,12 +1,26 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../theme.dart';
 import '../widgets/album_art.dart';
+import '../models/song.dart';
 
 class InspirationScreen extends StatefulWidget {
   final AppTheme t;
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
+  final List<Song> extraSongs;
+  final Set<String> removedLibrarySongs;
+  final void Function(Song) onAddSong;
+  final void Function(String title) onRemoveSong;
 
-  const InspirationScreen({super.key, required this.t, required this.navigate});
+  const InspirationScreen({
+    super.key,
+    required this.t,
+    required this.navigate,
+    required this.extraSongs,
+    required this.removedLibrarySongs,
+    required this.onAddSong,
+    required this.onRemoveSong,
+  });
 
   @override
   State<InspirationScreen> createState() => _InspirationScreenState();
@@ -18,16 +32,75 @@ class _InspirationScreenState extends State<InspirationScreen> {
 
   AppTheme get t => widget.t;
 
+  bool _isInLibrary(String title) {
+    final key = title.toLowerCase();
+    if (widget.extraSongs.any((s) => s.title.toLowerCase() == key)) return true;
+    if (widget.removedLibrarySongs.contains(title)) return false;
+    return Song.library.any((s) => s.title.toLowerCase() == key);
+  }
+
+  void _handleButtonTap(BuildContext context, ({String title, String artist, String genre, int bpm, int seed, String desc}) song) {
+    final title = song.title;
+
+    if (!_isInLibrary(title)) {
+      final rng = Random();
+      final mins = 2 + rng.nextInt(5);
+      final secs = rng.nextInt(60);
+      widget.onAddSong(Song(
+        title: title,
+        artist: song.artist,
+        seed: song.seed,
+        bpm: song.bpm,
+        duration: '$mins:${secs.toString().padLeft(2, '0')}',
+        progress: 5 + rng.nextInt(91),
+      ));
+      setState(() {});
+      return;
+    }
+
+    final isExtra = widget.extraSongs.any((s) => s.title.toLowerCase() == title.toLowerCase());
+    if (isExtra) {
+      widget.onRemoveSong(title);
+      setState(() {});
+      return;
+    }
+
+    // Base library song — confirm before removing
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove from library?'),
+        content: Text('"$title" will be removed from your library.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.onRemoveSong(title);
+              setState(() {});
+            },
+            child: Text('Remove', style: TextStyle(color: widget.t.accent)),
+          ),
+        ],
+      ),
+    );
+  }
+
   static const _songs = [
     (title: 'Wish You Were Here', artist: 'Pink Floyd', genre: 'Classic Rock', bpm: 98, seed: 6, desc: 'Iconic 12-string acoustic intro — great for fingerpicking practice.'),
     (title: 'Blackbird', artist: 'The Beatles', genre: 'Folk / Rock', bpm: 96, seed: 1, desc: 'Beautiful fingerstyle piece using open G tuning. Beginner-friendly.'),
     (title: 'Hotel California', artist: 'Eagles', genre: 'Soft Rock', bpm: 75, seed: 2, desc: 'Legendary outro solo with smooth bends and clean tone.'),
+    (title: 'Stairway to Heaven', artist: 'Led Zeppelin', genre: 'Hard Rock', bpm: 82, seed: 8, desc: 'Timeless fingerpicked arpeggio intro — every guitarist\'s milestone.'),
   ];
 
   static const _palettes = [
     (from: Color(0xFF1A2A1A), to: Color(0xFF0D1A0D), accent: Color(0xFF4A7C59)),
     (from: Color(0xFF1A1A2A), to: Color(0xFF0D0D1A), accent: Color(0xFF4A5C7C)),
     (from: Color(0xFF2A1A0D), to: Color(0xFF1A0D05), accent: Color(0xFFC96A3A)),
+    (from: Color(0xFF1A0D2A), to: Color(0xFF0D051A), accent: Color(0xFF7A4AC9)),
   ];
 
   @override
@@ -92,22 +165,6 @@ class _InspirationScreenState extends State<InspirationScreen> {
                     ),
                   ),
 
-                  // Counter badge
-                  Positioned(
-                    top: 16, right: 16,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.55),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                      child: Text(
-                        '${_current + 1} / ${_songs.length}',
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
-                      ),
-                    ),
-                  ),
-
                   // Play/pause
                   Center(
                     child: GestureDetector(
@@ -138,12 +195,24 @@ class _InspirationScreenState extends State<InspirationScreen> {
                           colors: [Colors.transparent, Colors.black.withValues(alpha: 0.8)],
                         ),
                       ),
-                      padding: const EdgeInsets.fromLTRB(20, 40, 20, 16),
+                      padding: const EdgeInsets.fromLTRB(20, 40, 24, 16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(song.title,
-                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white)),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Text(song.title,
+                                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white)),
+                              ),
+                              const SizedBox(width: 14),
+                              _AddToLibraryButton(
+                                inLibrary: _isInLibrary(song.title),
+                                onTap: () => _handleButtonTap(context, song),
+                              ),
+                            ],
+                          ),
                           const SizedBox(height: 2),
                           Text('${song.artist} · ${song.genre}',
                               style: TextStyle(fontSize: 14, color: Colors.white.withValues(alpha: 0.7))),
@@ -181,28 +250,6 @@ class _InspirationScreenState extends State<InspirationScreen> {
                 ],
               ),
             ),
-          ),
-        ),
-
-        // Dot indicators
-        Container(
-          color: t.bg,
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(_songs.length, (i) => GestureDetector(
-              onTap: () => setState(() => _current = i),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                width: i == _current ? 20 : 7,
-                height: 7,
-                decoration: BoxDecoration(
-                  color: i == _current ? t.accent : t.border,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-            )),
           ),
         ),
 
@@ -246,6 +293,68 @@ class _InspirationScreenState extends State<InspirationScreen> {
       ],
     );
   }
+}
+
+class _AddToLibraryButton extends StatelessWidget {
+  final bool inLibrary;
+  final VoidCallback onTap;
+
+  const _AddToLibraryButton({required this.inLibrary, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 32,
+        height: 32,
+        child: Center(
+          child: inLibrary
+              ? CustomPaint(
+                  size: const Size(24, 24),
+                  painter: const _CheckCirclePainter(),
+                )
+              : const Icon(Icons.add, color: Colors.white, size: 24),
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckCirclePainter extends CustomPainter {
+  const _CheckCirclePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.saveLayer(Offset.zero & size, Paint());
+
+    canvas.drawCircle(
+      Offset(size.width / 2, size.height / 2),
+      size.width / 2,
+      Paint()..color = Colors.white,
+    );
+
+    final path = Path()
+      ..moveTo(size.width * 0.24, size.height * 0.50)
+      ..lineTo(size.width * 0.42, size.height * 0.68)
+      ..lineTo(size.width * 0.76, size.height * 0.32);
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..blendMode = BlendMode.clear
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = size.width * 0.13
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_CheckCirclePainter old) => false;
 }
 
 class _ShimmerPainter extends CustomPainter {

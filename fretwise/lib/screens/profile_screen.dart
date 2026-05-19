@@ -1,13 +1,33 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../models/app_state.dart';
 import '../widgets/section_header.dart';
 import 'shop_screen.dart';
+
+class _SongLogData {
+  final String title;
+  final String artist;
+  final int durationSeconds;
+  final String userNote;
+  final String aiNote;
+  final List<String> recordings;
+
+  const _SongLogData({
+    required this.title,
+    required this.artist,
+    required this.durationSeconds,
+    required this.userNote,
+    required this.aiNote,
+    required this.recordings,
+  });
+}
 
 class ProfileScreen extends StatefulWidget {
   final AppTheme t;
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
   final int coins;
   final Set<String> ownedItems;
+  final List<DiaryEntry> diaryEntries;
 
   const ProfileScreen({
     super.key,
@@ -15,6 +35,7 @@ class ProfileScreen extends StatefulWidget {
     required this.navigate,
     required this.coins,
     required this.ownedItems,
+    required this.diaryEntries,
   });
 
   @override
@@ -24,6 +45,9 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   bool _showItemsPage = false;
   bool _showNameEdit = false;
+  bool _showDailyLog = false;
+  String _dailyLogDate = '';
+  List<_SongLogData> _dailyLogSongs = [];
   String _userName = 'Alex Johnson';
   final _nameCtrl = TextEditingController();
 
@@ -40,12 +64,47 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ('💎', 'Level\n7'),
   ];
 
-  static const _diary = [
+  static const _staticDiary = [
     (date: 'May 3, 2026', songs: ['Wonderwall – 22 min', 'Blackbird – 8 min'], note: 'Chord transitions feeling smoother today!', xp: '+85 XP'),
     (date: 'May 2, 2026', songs: ['Hotel California – 30 min'], note: 'Struggled with the solo part, need to slow down.', xp: '+95 XP'),
     (date: 'Apr 30, 2026', songs: ['Wish You Were Here – 20 min', "Knockin' On Heaven's Door – 15 min"], note: 'Great session! Both songs almost complete.', xp: '+110 XP'),
     (date: 'Apr 29, 2026', songs: ['Nothing Else Matters – 25 min'], note: 'Starting to get the fingerpicking pattern.', xp: '+80 XP'),
   ];
+
+  static String _fmtDate(DateTime dt) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
+
+  static String _fmtDuration(int seconds) {
+    final m = seconds ~/ 60;
+    return m < 1 ? '<1 min' : '$m min';
+  }
+
+  void _openDailyLog(String date, List<_SongLogData> songs) {
+    setState(() { _showDailyLog = true; _dailyLogDate = date; _dailyLogSongs = songs; });
+  }
+
+  static String _dummyAiNote(String title) =>
+      'Your timing on "$title" is improving steadily. Focus on keeping consistent pressure on chord shapes during transitions — there\'s a small hesitation around the bridge that a few slow-practice reps will fix. Overall a solid session!';
+
+  static List<String> _dummyRecordings(String dateStr) => [
+    'rec_${dateStr.replaceAll(', ', '_').replaceAll(' ', '_')}_001.m4a',
+    'rec_${dateStr.replaceAll(', ', '_').replaceAll(' ', '_')}_002.m4a',
+  ];
+
+  static _SongLogData _parseStaticSong(String songStr, String note, String dateStr) {
+    final parts = songStr.split(' – ');
+    final title = parts[0];
+    final minutes = parts.length > 1 ? int.tryParse(parts[1].replaceAll(' min', '').trim()) ?? 0 : 0;
+    return _SongLogData(
+      title: title, artist: '',
+      durationSeconds: minutes * 60,
+      userNote: note,
+      aiNote: _dummyAiNote(title),
+      recordings: _dummyRecordings(dateStr),
+    );
+  }
 
   @override
   void dispose() {
@@ -70,12 +129,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       width: 84, height: 84,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [t.accent, t.accentMid],
-                        ),
-                        boxShadow: [BoxShadow(color: t.accent.withValues(alpha: 0.3), blurRadius: 20)],
+                        color: t.accent,
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.10), blurRadius: 8)],
                       ),
                       child: const Center(
                         child: Text('A', style: TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: Colors.white)),
@@ -254,61 +309,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Column(
                         children: [
-                          for (final entry in _diary) ...[
-                            Container(
-                              decoration: BoxDecoration(
-                                color: t.surface,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: t.border),
-                                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                          for (final entry in widget.diaryEntries) ...[
+                            _DiaryCard(
+                              t: t,
+                              date: _fmtDate(entry.date),
+                              songs: ['${entry.title} – ${_fmtDuration(entry.duration)}'],
+                              xp: '+${(entry.duration / 10 + 3).clamp(3, 15).floor() * 5} XP',
+                              onTap: () => _openDailyLog(
+                                _fmtDate(entry.date),
+                                [_SongLogData(
+                                  title: entry.title,
+                                  artist: entry.artist,
+                                  durationSeconds: entry.duration,
+                                  userNote: entry.userNote,
+                                  aiNote: _dummyAiNote(entry.title),
+                                  recordings: _dummyRecordings(_fmtDate(entry.date)),
+                                )],
                               ),
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(entry.date, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: t.text)),
-                                      Text(entry.xp, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.green)),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  for (final song in entry.songs) ...[
-                                    Row(
-                                      children: [
-                                        Container(width: 4, height: 4, decoration: BoxDecoration(shape: BoxShape.circle, color: t.accent)),
-                                        const SizedBox(width: 7),
-                                        Text(song, style: TextStyle(fontSize: 13, color: t.textSec)),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 5),
-                                  ],
-                                  Divider(color: t.borderLight, height: 10),
-                                  Row(
-                                    children: [
-                                      Container(
-                                        width: 22, height: 22,
-                                        decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(8),
-                                          gradient: const LinearGradient(
-                                            colors: [Color(0xFF1A7A5E), Color(0xFF2EAD85)],
-                                            begin: Alignment.topLeft,
-                                            end: Alignment.bottomRight,
-                                          ),
-                                        ),
-                                        child: const Icon(Icons.chat_bubble_outline, size: 11, color: Colors.white),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Expanded(
-                                        child: Text(
-                                          '"${entry.note}"',
-                                          style: TextStyle(fontSize: 13, color: t.textSec, fontStyle: FontStyle.italic, height: 1.5),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                            ),
+                            const SizedBox(height: 10),
+                          ],
+                          for (final entry in _staticDiary) ...[
+                            _DiaryCard(
+                              t: t,
+                              date: entry.date,
+                              songs: entry.songs,
+                              xp: entry.xp,
+                              onTap: () => _openDailyLog(
+                                entry.date,
+                                [for (int i = 0; i < entry.songs.length; i++)
+                                  _parseStaticSong(entry.songs[i], i == 0 ? entry.note : '', entry.date)],
                               ),
                             ),
                             const SizedBox(height: 10),
@@ -322,6 +352,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
         ),
+
+        // Daily log detail page
+        if (_showDailyLog)
+          _DailyLogPage(
+            t: t,
+            date: _dailyLogDate,
+            songs: _dailyLogSongs,
+            onBack: () => setState(() => _showDailyLog = false),
+          ),
 
         // My Items subpage
         if (_showItemsPage)
@@ -522,6 +561,274 @@ class _ItemsPage extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DiaryCard extends StatelessWidget {
+  final AppTheme t;
+  final String date;
+  final List<String> songs;
+  final String xp;
+  final VoidCallback? onTap;
+
+  const _DiaryCard({required this.t, required this.date, required this.songs, required this.xp, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: t.border),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(date, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: t.text)),
+              Text(xp, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.accent)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          for (final song in songs) ...[
+            Row(
+              children: [
+                Container(width: 4, height: 4, decoration: BoxDecoration(shape: BoxShape.circle, color: t.accent)),
+                const SizedBox(width: 7),
+                Expanded(child: Text(song, style: TextStyle(fontSize: 13, color: t.textSec))),
+              ],
+            ),
+            const SizedBox(height: 5),
+          ],
+        ],
+      ),
+    ),
+    );
+  }
+}
+
+class _DailyLogPage extends StatelessWidget {
+  final AppTheme t;
+  final String date;
+  final List<_SongLogData> songs;
+  final VoidCallback onBack;
+
+  const _DailyLogPage({required this.t, required this.date, required this.songs, required this.onBack});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: t.bg,
+      child: Column(
+        children: [
+          Container(
+            color: t.surface,
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: onBack,
+                  child: Icon(Icons.arrow_back, size: 22, color: t.text),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(date, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: t.text)),
+                      Text('${songs.length} song${songs.length == 1 ? '' : 's'} practiced',
+                          style: TextStyle(fontSize: 12, color: t.textSec)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  for (final song in songs) ...[
+                    _SongLogCard(t: t, song: song),
+                    const SizedBox(height: 14),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SongLogCard extends StatelessWidget {
+  final AppTheme t;
+  final _SongLogData song;
+
+  const _SongLogCard({required this.t, required this.song});
+
+  static String _fmtDur(int s) {
+    final m = s ~/ 60;
+    return m < 1 ? '<1 min' : '$m min';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: t.border),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Song title + duration
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Row(
+              children: [
+                Container(
+                  width: 38, height: 38,
+                  decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(11)),
+                  child: Icon(Icons.music_note, size: 20, color: t.accent),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(song.title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: t.text)),
+                      if (song.artist.isNotEmpty)
+                        Text(song.artist, style: TextStyle(fontSize: 12, color: t.textSec)),
+                    ],
+                  ),
+                ),
+                Container(
+                  decoration: BoxDecoration(color: t.accentSoft, borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(Icons.timer_outlined, size: 12, color: t.accent),
+                      const SizedBox(width: 4),
+                      Text(_fmtDur(song.durationSeconds),
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.accent)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          Divider(color: t.borderLight, height: 1),
+
+          // Your notes
+          _LogSection(
+            t: t,
+            icon: Icons.edit_note_outlined,
+            label: 'YOUR NOTES',
+            iconColor: const Color(0xFF5B8DEF),
+            child: song.userNote.isNotEmpty
+                ? Text(song.userNote,
+                    style: TextStyle(fontSize: 13, color: t.text, height: 1.6))
+                : Text('No notes added for this session.',
+                    style: TextStyle(fontSize: 13, color: t.textMuted, fontStyle: FontStyle.italic)),
+          ),
+
+          Divider(color: t.borderLight, height: 1),
+
+          // AI Coach notes
+          _LogSection(
+            t: t,
+            icon: Icons.chat_bubble_outline,
+            label: 'AI COACH',
+            iconColor: const Color(0xFF1A7A5E),
+            child: Text(song.aiNote,
+                style: TextStyle(fontSize: 13, color: t.text, height: 1.6)),
+          ),
+
+          Divider(color: t.borderLight, height: 1),
+
+          // Recordings
+          _LogSection(
+            t: t,
+            icon: Icons.mic_none_outlined,
+            label: 'RECORDINGS',
+            iconColor: AppColors.red,
+            child: Column(
+              children: [
+                for (final rec in song.recordings)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: t.surfaceAlt,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: t.borderLight),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(Icons.play_circle_outline, size: 20, color: t.accent),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(rec,
+                              style: TextStyle(fontSize: 12, color: t.textSec, fontFamily: 'monospace'))),
+                          Icon(Icons.download_outlined, size: 18, color: t.textMuted),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LogSection extends StatelessWidget {
+  final AppTheme t;
+  final IconData icon;
+  final String label;
+  final Color iconColor;
+  final Widget child;
+
+  const _LogSection({required this.t, required this.icon, required this.label, required this.iconColor, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 20, height: 20,
+                decoration: BoxDecoration(color: iconColor.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(6)),
+                child: Icon(icon, size: 12, color: iconColor),
+              ),
+              const SizedBox(width: 7),
+              Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700,
+                  color: t.textMuted, letterSpacing: 0.8)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          child,
         ],
       ),
     );

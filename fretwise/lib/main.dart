@@ -71,6 +71,14 @@ class _FretwiseShellState extends State<FretwiseShell> {
   String _prevScreen = 'home';
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
+    if (dest == 'sessionComplete' && props != null) {
+      context.read<AppState>().addDiaryEntry(DiaryEntry(
+        date: DateTime.now(),
+        title: props['title'] as String? ?? '',
+        artist: props['artist'] as String? ?? '',
+        duration: props['duration'] as int? ?? 0,
+      ));
+    }
     setState(() {
       _screenProps = props;
       _screen = dest;
@@ -123,15 +131,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
                     height: 52,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF1A7A5E), Color(0xFF2EAD85)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      boxShadow: [
-                        BoxShadow(color: const Color(0xFF1A7A5E).withValues(alpha: 0.45), blurRadius: 20),
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 4),
-                      ],
+                      color: t.accent,
+                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.14), blurRadius: 8)],
                     ),
                     child: const Icon(Icons.chat_bubble_outline, size: 22, color: Colors.white),
                   ),
@@ -151,7 +152,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
         return HomeScreen(t: t, navigate: _navigate, coins: state.coins);
 
       case 'library':
-        return LibraryScreen(t: t, navigate: _navigate);
+        return LibraryScreen(t: t, navigate: _navigate, extraSongs: state.extraSongs, removedLibrarySongs: state.removedLibrarySongs, onAddSong: state.addSong);
 
       case 'calendar':
         return CalendarScreen(t: t, navigate: _navigate);
@@ -170,7 +171,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
         );
 
       case 'profile':
-        return ProfileScreen(t: t, navigate: _navigate, coins: state.coins, ownedItems: state.ownedItems);
+        return ProfileScreen(t: t, navigate: _navigate, coins: state.coins, ownedItems: state.ownedItems, diaryEntries: state.diaryEntries);
 
       case 'practicing':
         return PracticingScreen(
@@ -190,10 +191,11 @@ class _FretwiseShellState extends State<FretwiseShell> {
           artist: props['artist'] as String? ?? 'Oasis',
           duration: props['duration'] as int? ?? 0,
           onOpenAI: _openAI,
+          onSaveNote: (note) => context.read<AppState>().updateLatestDiaryNote(note),
         );
 
       case 'inspiration':
-        return InspirationScreen(t: t, navigate: _navigate);
+        return InspirationScreen(t: t, navigate: _navigate, extraSongs: state.extraSongs, removedLibrarySongs: state.removedLibrarySongs, onAddSong: state.addSong, onRemoveSong: state.removeSongByTitle);
 
       default:
         return HomeScreen(t: t, navigate: _navigate, coins: state.coins);
