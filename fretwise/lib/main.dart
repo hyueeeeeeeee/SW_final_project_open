@@ -69,6 +69,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
   Map<String, dynamic>? _screenProps;
   bool _showAI = false;
   String _prevScreen = 'home';
+  Offset _fabPos = const Offset(20, 84);
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
     if (dest == 'sessionComplete' && props != null) {
@@ -122,17 +123,39 @@ class _FretwiseShellState extends State<FretwiseShell> {
 
             if (_showFloatingAI)
               Positioned(
-                bottom: 84,
-                right: 20,
+                bottom: _fabPos.dy,
+                right: _fabPos.dx,
                 child: GestureDetector(
                   onTap: _openAI,
+                  onPanUpdate: (details) {
+                    final size = MediaQuery.sizeOf(context);
+                    const fab = 52.0;
+                    setState(() {
+                      _fabPos = Offset(
+                        (_fabPos.dx - details.delta.dx).clamp(0, size.width - fab),
+                        (_fabPos.dy - details.delta.dy).clamp(0, size.height - fab),
+                      );
+                    });
+                  },
                   child: Container(
                     width: 52,
                     height: 52,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: t.accent,
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.14), blurRadius: 8)],
+                      color: const Color(0xFF2F6F73),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.28),
+                          blurRadius: 16,
+                          spreadRadius: 1,
+                          offset: const Offset(0, 5),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.10),
+                          blurRadius: 4,
+                          offset: const Offset(0, 1),
+                        ),
+                      ],
                     ),
                     child: const Icon(Icons.chat_bubble_outline, size: 22, color: Colors.white),
                   ),
