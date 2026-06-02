@@ -1,15 +1,14 @@
-
 const { onCall } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 admin.initializeApp();
 
-// 🔑 在這裡貼上你的 Gemini API Key
+// 🔑 貼上你的 Gemini API Key
 const GEMINI_API_KEY = "AQ.Ab8RN6KPg6twQE4AqPVuIzAWo0eBJeOaw-b4frp8BY_pdkiYhw"; 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-// 🛠️ 神奇小工具：真實 YouTube 爬蟲 (保證抓到真正能播的影片)
+// 🛠️ 真實 YouTube 爬蟲
 async function getRealYouTubeVideo(songTitle, artist) {
   try {
     const query = encodeURIComponent(`${songTitle} ${artist} 吉他教學 guitar tutorial`);
@@ -17,7 +16,6 @@ async function getRealYouTubeVideo(songTitle, artist) {
     const response = await fetch(searchUrl);
     const html = await response.text();
     
-    // 抓取搜尋結果的第一個真實影片 ID
     const match = html.match(/watch\?v=([a-zA-Z0-9_-]{11})/);
     if (match && match[1]) {
       return `https://www.youtube.com/watch?v=${match[1]}`;
@@ -25,10 +23,8 @@ async function getRealYouTubeVideo(songTitle, artist) {
   } catch (error) {
     console.error("YouTube 搜尋失敗:", error);
   }
-  // 萬一真的抓不到，給一個保證能播的真實教學影片
-  return "https://www.youtube.com/watch?v=mYpXn-P8y_4"; 
+  return "https://www.youtube.com/watch?v=mYpXn-P8y_4"; // 備用 Blackbird
 }
-
 
 // --- 巧君負責的功能 1: 搜尋歌曲 ---
 exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) => {
@@ -36,7 +32,6 @@ exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) =
   const artist = request.data.artist || "Unknown Artist";
   const uid = request.auth ? request.auth.uid : "test_user_123";
 
-  // 1. 使用爬蟲抓取「真實存在」的教學影片
   const realVideoUrl = await getRealYouTubeVideo(title, artist);
 
   try {
@@ -56,7 +51,7 @@ exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) =
     await songRef.collection('practiceMaterials').add({
       type: 'video',
       title: `${title} Guitar Tutorial`,
-      videoUrl: realVideoUrl, // 絕對能播的真實網址
+      videoUrl: realVideoUrl,
       active: true,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -67,52 +62,65 @@ exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) =
   }
 });
 
-
-// --- 巧君負責的功能 2: 更新 Feed ---
-exports.updateFeed = onCall({ cors: true, invoker: "public" }, async (request) => {
-  const uid = request.auth ? request.auth.uid : "test_user_123";
-  const db = admin.firestore();
-  const feedCol = db.collection('users').doc(uid).collection('feed');
-
-  try {
-    // 🧹 1. 清空舊的壞影片
-    const snapshot = await feedCol.get();
-    const batch = db.batch();
-    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-    await batch.commit();
-
-    // 🤖 2. 讓 Gemini 推薦歌曲 (只要它給歌名和介紹就好)
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    const prompt = `你是一個吉他老師。請推薦 3 首適合吉他練習的流行曲（中英文皆可）。
-    請以嚴格的 JSON 陣列格式回傳，格式如下：
-    [ { "title": "歌曲名", "artist": "歌手", "description": "一句簡短的推薦理由" } ]`;
-
-    const result = await model.generateContent(prompt);
-    let aiResponse = result.response.text().trim();
-    if (aiResponse.startsWith("```json")) aiResponse = aiResponse.replace("```json", "");
-    if (aiResponse.startsWith("```")) aiResponse = aiResponse.replace("```", "");
-    if (aiResponse.endsWith("```")) aiResponse = aiResponse.slice(0, -3);
-
-    const recommendedSongs = JSON.parse(aiResponse.trim());
-
-    // 🎸 3. 將 Gemini 推薦的歌曲，丟給爬蟲去抓真實影片網址
-    for (const item of recommendedSongs) {
-      const realVideoUrl = await getRealYouTubeVideo(item.title, item.artist);
-      
-      await feedCol.add({
-        title: item.title,
-        artist: item.artist,
-        videoUrl: realVideoUrl, // 絕對能播的真實網址
-        description: item.description,
-        genre: "Pop/Rock",
-        actionState: "ignored",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+// --- 巧君負責的功能 2: 更新 Feed (無限延伸 + 隨機版) ---
+exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120 }, async (request) => {
+    const uid = request.auth ? request.auth.uid : "test_user_123";
+    const db = admin.firestore();
+    const feedCol = db.collection('users').doc(uid).collection('feed');
+  
+    try {
+      // 🚨 這裡已經刪除「清空資料庫」的邏輯，現在會無限往後加！
+  
+      let songs = [];
+      try {
+        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+        // 💡 加上隨機時間種子，強迫 AI 每次都推薦不一樣的歌
+        const randomSeed = Date.now();
+        const prompt = `你是一個吉他老師。請「隨機」推薦 3 首適合吉他練習的流行曲（隨機種子：${randomSeed}，確保與之前不同）。只回傳 JSON 陣列，絕對不要包含任何其他文字。格式: [{"title":"歌曲名","artist":"歌手","description":"推薦原因"}]`;
+  
+        const result = await model.generateContent(prompt);
+        let aiResponse = result.response.text().trim();
+        
+        const jsonMatch = aiResponse.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          songs = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error("找不到 JSON 陣列");
+        }
+      } catch (aiError) {
+        console.error("Gemini 解析失敗，啟用隨機備用名單");
+        // 💡 備用歌單擴充，並加入隨機洗牌機制
+        const fallbackPool = [
+          { title: "愛人錯過", artist: "告五人", description: "AI 備用推薦：節奏輕快，非常適合新手練習刷法。" },
+          { title: "Perfect", artist: "Ed Sheeran", description: "AI 備用推薦：經典的吉他情歌，和弦進行簡單。" },
+          { title: "Yellow", artist: "Coldplay", description: "AI 備用推薦：特殊的吉他調音與迷人的刷奏。" },
+          { title: "說好不哭", artist: "周杰倫", description: "AI 備用推薦：經典神曲，練習和弦轉換的好選擇。" },
+          { title: "Photograph", artist: "Ed Sheeran", description: "AI 備用推薦：優美的指彈前奏，適合進階練習。" },
+          { title: "擁抱", artist: "五月天", description: "AI 備用推薦：最經典的吉他社入門必學曲目。" },
+        ];
+        // 隨機洗牌，挑前 3 首
+        fallbackPool.sort(() => 0.5 - Math.random());
+        songs = fallbackPool.slice(0, 3);
+      }
+  
+      // 將歌曲丟給爬蟲，並存入 Firebase
+      for (const s of songs) {
+        const url = await getRealYouTubeVideo(s.title, s.artist);
+        await feedCol.add({
+          title: s.title || "Unknown",
+          artist: s.artist || "Unknown",
+          videoUrl: url, 
+          description: s.description || "AI 推薦教學",
+          genre: "Pop/Rock",
+          actionState: "ignored",
+          // 💡 加入時間戳，這是前端排序的依據
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+  
+      return { success: true };
+    } catch (error) {
+      console.error("Feed 生成錯誤:", error);
+      throw new Error("Internal Server Error");
     }
-
-    return { success: true };
-  } catch (error) {
-    console.error("Feed 生成失敗:", error);
-    throw new Error(error.message);
-  }
-});
+  });

@@ -347,7 +347,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               ),
                             for (final s in songs) ...[
                               _SongCard(
-                                key: _cardKeys.putIfAbsent(s.title, () => GlobalKey()),
+                                key: ValueKey(s.id),
                                 song: s,
                                 t: t,
                                 isHighlighted: _highlightedSong == s.title,

@@ -73,11 +73,20 @@ class _InspirationScreenState extends State<InspirationScreen> {
           );
         }
 
-        // 2. 如果有資料，顯示類似 TikTok 的垂直滑動頁面
+       
+        // 找到這個 PageView.builder
         return PageView.builder(
           scrollDirection: Axis.vertical,
           itemCount: feedItems.length,
+          // 💡 新增這段：當滑到最後一部影片時，叫 AI 繼續生新的！
+          onPageChanged: (index) {
+            if (index == feedItems.length - 1) {
+              appState.updateFeed(); // 背景默默生成，無限滑動
+            }
+          },
           itemBuilder: (context, index) {
+            // ... (保持原樣)
+            // ... (保持原樣)
             return _VideoFeedItem(
               item: feedItems[index],
               t: widget.t,
@@ -124,8 +133,8 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
         flags: const YoutubePlayerFlags(
           autoPlay: true,
           loop: true,
-          mute: false,
-          hideControls: true, // 隱藏控制列讓介面更乾淨
+          mute: true, 
+          hideControls: false, 
         ),
       );
     }
