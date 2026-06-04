@@ -87,8 +87,10 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
         final result = await callable.call(payload);
         print('recordSession result: ${result.data}');
-        _aiResponse = result.data as Map<String, dynamic>?;
-        _showAiModal = true;
+        setState(() {
+          _aiResponse = result.data as Map<String, dynamic>?;
+          _showAiModal = true;
+        });
 
         // Best-effort: set firstCompleteDate on user's songProfiles doc if missing
         final songId = makeSongId(widget.title, widget.artist);
@@ -118,7 +120,10 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
       print('recordSession error: $e');
     }
 
-    // navigation will occur after user chooses in AI modal
+    // If the AI modal didn't open (user null, or Firebase error), go home directly
+    if (!_showAiModal) {
+      widget.navigate('home');
+    }
   }
 
   @override
