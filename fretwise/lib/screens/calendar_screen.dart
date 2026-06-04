@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../theme.dart';
 import '../widgets/album_art.dart';
 import '../widgets/section_header.dart';
 import '../widgets/progress_bar.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:device_calendar/device_calendar.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:cloud_functions/cloud_functions.dart';
 
 class CalendarScreen extends StatefulWidget {
   final AppTheme t;
@@ -14,58 +21,220 @@ class CalendarScreen extends StatefulWidget {
   State<CalendarScreen> createState() => _CalendarScreenState();
 }
 
-class _CalendarScreenState extends State<CalendarScreen> {
+class _CalendarScreenState extends State<CalendarScreen>
+    with WidgetsBindingObserver {
   final _today = DateTime.now();
   late int _month;
   late int _year;
   bool _showTodayDetail = false;
+  bool _isUpdatingPlan = false;
+  double _updateProgress = 0.0; // 0.0 - 1.0
+  bool _cancelUpdateRequested = false;
+  bool _notifyLaterRequested = false;
+  Timer? _updateProgressTimer;
+  final DeviceCalendarPlugin _deviceCalendarPlugin = DeviceCalendarPlugin();
+  Map<String, dynamic>? _selectedTask;
 
   @override
   void initState() {
     super.initState();
     _month = _today.month;
     _year = _today.year;
+    tzdata.initializeTimeZones();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.paused) {
+      print("使用者離開 App，開始同步行事曆與更新 AI 計畫...");
+      _fetchExternalCalendar();
+    }
   }
 
   AppTheme get t => widget.t;
 
-  static const _practiced = {1,2,3,4,7,8,9,10,11,14,15,16,17,18,21,22,23,24,25,28,29,30};
-  static const _missed = {5,6,12,13,19,20};
-  static const _upcoming = {4,5,6,7,8,9,10};
+  // 1. 建立一個 Stream 來監聽 Firebase 中當月的 PracticeDay 資料
+  Stream<List<Map<String, dynamic>>> _getPracticeDaysStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return Stream.value([]); // 如果未登入回傳空陣列
 
-  Color _dayColor(int day) {
-    final isToday = day == _today.day && _month == _today.month && _year == _today.year;
-    final isPast = day < _today.day || _month < _today.month || _year < _today.year;
-    if (isToday) return t.accent;
-    if (isPast && _practiced.contains(day)) return const Color(0xFF7A9E7A);
-    if (isPast && _missed.contains(day)) return const Color(0xFFB07868);
-    if (!isPast && _upcoming.contains(day - _today.day)) return t.accent;
-    return Colors.transparent;
+    // 將目前的年月轉為 YYYY-MM 格式，用來過濾當月資料
+    final monthStr = '$_year-${_month.toString().padLeft(2, '0')}';
+
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('practiceDays')
+        // 根據 shared_models.md，date 的格式是 YYYY-MM-DD
+        .where('date', isGreaterThanOrEqualTo: '$monthStr-01')
+        .where('date', isLessThanOrEqualTo: '$monthStr-31')
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map((doc) => doc.data()).toList());
   }
 
-  Color _dayTextColor(int day) {
-    final isToday = day == _today.day && _month == _today.month && _year == _today.year;
-    final isPast = day < _today.day;
-    if (isToday) return Colors.white;
-    if (isPast && _practiced.contains(day)) return Colors.white;
-    if (isPast && _missed.contains(day)) return Colors.white;
-    if (!isPast && _upcoming.contains(day - _today.day)) return t.accent;
-    return day > _today.day ? t.textMuted : t.text;
+  Stream<List<Map<String, dynamic>>> _getPracticeTasksStream() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return Stream.value([]);
+
+    final todayStr =
+        '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
+
+    return FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('practiceTasks')
+        .where('dayId', isGreaterThanOrEqualTo: todayStr)
+        .orderBy('dayId')
+        .orderBy('orderIndex')
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map((doc) => doc.data()).toList());
   }
 
-  bool _hasBorder(int day) {
-    final isToday = day == _today.day && _month == _today.month && _year == _today.year;
-    if (isToday) return false;
-    final isPast = day < _today.day;
-    return (isPast && (_practiced.contains(day) || _missed.contains(day))) ||
-        (!isPast && _upcoming.contains(day - _today.day));
+  // 讀取外部行事曆（未來 7 天）
+  Future<void> _fetchExternalCalendar() async {
+    var permissionsGranted = await _deviceCalendarPlugin.hasPermissions();
+    if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
+      permissionsGranted = await _deviceCalendarPlugin.requestPermissions();
+      if (!permissionsGranted.isSuccess || !permissionsGranted.data!) {
+        print("使用者拒絕了行事曆權限");
+        return;
+      }
+    }
+
+    final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
+    if (!calendarsResult.isSuccess || calendarsResult.data == null) return;
+
+    final calendars = calendarsResult.data!;
+
+    final currentLocation = tz.getLocation('Asia/Taipei');
+    final startDate = tz.TZDateTime.now(currentLocation);
+    final endDate = startDate.add(const Duration(days: 7));
+
+    List<Map<String, dynamic>> externalEvents = [];
+
+    for (var calendar in calendars) {
+      // 1. 多加一個 calendar.id == null 的檢查，擋掉幽靈行事曆
+      if (calendar.isReadOnly == true || calendar.id == null) continue;
+
+      final retrieveEventsParams = RetrieveEventsParams(
+        startDate: startDate,
+        endDate: endDate,
+      );
+
+      // 2. 用 try-catch 包起來，就算某個行事曆壞掉，也不會讓整個 App 當機
+      try {
+        final eventsResult = await _deviceCalendarPlugin.retrieveEvents(
+          calendar.id,
+          retrieveEventsParams,
+        );
+
+        if (eventsResult.isSuccess && eventsResult.data != null) {
+          for (var event in eventsResult.data!) {
+            externalEvents.add({
+              // 3. 加上 ?? '忙碌行程'，如果 title 是空的，就給它一個預設名字
+              'title': event.title ?? '忙碌行程',
+              'start': event.start?.toIso8601String(),
+              'end': event.end?.toIso8601String(),
+            });
+          }
+        }
+      } catch (e) {
+        print("讀取行事曆 ${calendar.name} 時發生小錯誤，已跳過：$e");
+      }
+    }
+
+    print("抓到了 ${externalEvents.length} 個外部行程：");
+    print(externalEvents);
+
+    // 顯示更新進度 UI
+    setState(() {
+      _isUpdatingPlan = true;
+      _updateProgress = 0.02;
+      _cancelUpdateRequested = false;
+      _notifyLaterRequested = false;
+    });
+
+    // 啟動假進度條：遞增到 0.95，真正結果到時再完成到 1.0
+    _updateProgressTimer?.cancel();
+    _updateProgressTimer = Timer.periodic(const Duration(milliseconds: 300), (
+      t,
+    ) {
+      if (_cancelUpdateRequested) {
+        t.cancel();
+        return;
+      }
+      setState(() {
+        _updateProgress = (_updateProgress + 0.03).clamp(0.0, 0.95);
+      });
+    });
+
+    // 呼叫後端 AI 進行排程 (updatePlan)
+    try {
+      print("正在呼叫 AI 排程 API (updatePlan)...");
+      final HttpsCallable callable = FirebaseFunctions.instance.httpsCallable(
+        'updatePlan',
+      );
+
+      // 傳送外部行事曆資料，後端會自動讀取資料庫中的 Preference 等資訊
+      final result = await callable.call({'externalCalendar': externalEvents});
+
+      if (_cancelUpdateRequested) {
+        // 使用者已取消，忽略結果
+        print('updatePlan 已被取消，忽略回傳');
+      } else {
+        // 將進度補足到 100%
+        _updateProgressTimer?.cancel();
+        setState(() => _updateProgress = 1.0);
+        await Future.delayed(const Duration(milliseconds: 300));
+        print("AI 排程成功更新！後端回傳：${result.data}");
+        // 後端應該把新計畫寫入 Firestore，UI 會經由 streams 自動更新
+      }
+    } catch (e) {
+      if (!_cancelUpdateRequested) print("呼叫 AI API 失敗：$e");
+    } finally {
+      _updateProgressTimer?.cancel();
+      if (!_notifyLaterRequested) {
+        setState(() {
+          _isUpdatingPlan = false;
+          _updateProgress = 0.0;
+        });
+      } else {
+        // 若使用者選擇稍後通知，保留狀態並關閉 UI
+        setState(() {
+          _isUpdatingPlan = false;
+          _updateProgress = 0.0;
+          _notifyLaterRequested = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final daysInMonth = DateTime(_year, _month + 1, 0).day;
     final firstDay = DateTime(_year, _month, 1).weekday % 7;
-    final monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    final monthNames = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
 
     return Stack(
       children: [
@@ -76,41 +245,146 @@ class _CalendarScreenState extends State<CalendarScreen> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-                child: Text('Calendar',
-                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: t.text, fontFamily: 'Georgia')),
+                child: Text(
+                  'Calendar',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                    color: t.text,
+                    fontFamily: 'Georgia',
+                  ),
+                ),
               ),
 
-              // Today's Plan
+              // Today's Plan (dynamic)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SectionHeader(label: "Today's Plan", t: t),
-                    GestureDetector(
-                      onTap: () => setState(() => _showTodayDetail = true),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: t.surface,
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: t.border),
-                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
-                        ),
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
+                    StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: _getPracticeTasksStream(),
+                      builder: (context, snap) {
+                        final todayStr =
+                            '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
+                        if (!snap.hasData || snap.data!.isEmpty) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
                               children: [
                                 Row(
                                   children: [
-                                    const AlbumArt(seed: 0, size: 48, radius: 14),
+                                    const AlbumArt(
+                                      seed: 0,
+                                      size: 48,
+                                      radius: 14,
+                                    ),
                                     const SizedBox(width: 14),
                                     Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Text("Today's practice",
-                                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: t.textMuted, letterSpacing: 0.7)),
+                                        Text(
+                                          "No practice planned",
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: t.textMuted,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        final tasks = snap.data!;
+                        final todays = tasks
+                            .where((e) => (e['dayId'] as String) == todayStr)
+                            .toList();
+                        final Map<String, dynamic> task = todays.isNotEmpty
+                            ? todays.first
+                            : tasks.first;
+
+                        final title =
+                            task['title'] ?? task['songTitle'] ?? 'Practice';
+                        final minutes = task['minutes']?.toString() ?? '20';
+                        final artist = task['artist'] ?? '';
+                        final bpm = task['bpm']?.toString() ?? '';
+
+                        return GestureDetector(
+                          onTap: () => setState(() {
+                            _selectedTask = task;
+                            _showTodayDetail = true;
+                          }),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(20),
+                            child: Column(
+                              children: [
+                                Row(
+                                  children: [
+                                    const AlbumArt(
+                                      seed: 0,
+                                      size: 48,
+                                      radius: 14,
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          "Today's practice",
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600,
+                                            color: t.textMuted,
+                                            letterSpacing: 0.7,
+                                          ),
+                                        ),
                                         const SizedBox(height: 2),
-                                        Text('Wonderwall', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: t.text)),
-                                        Text('Oasis · 87 BPM', style: TextStyle(fontSize: 13, color: t.textSec)),
+                                        Text(
+                                          title,
+                                          style: TextStyle(
+                                            fontSize: 17,
+                                            fontWeight: FontWeight.w700,
+                                            color: t.text,
+                                          ),
+                                        ),
+                                        Text(
+                                          artist.isNotEmpty || bpm.isNotEmpty
+                                              ? '$artist${artist.isNotEmpty && bpm.isNotEmpty ? ' · ' : ''}$bpm${bpm.isNotEmpty ? ' BPM' : ''}'
+                                              : '',
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: t.textSec,
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ],
@@ -119,17 +393,41 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 ProgressBar(progress: 0, t: t),
                                 const SizedBox(height: 14),
                                 Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Text('20 min planned', style: TextStyle(fontSize: 12, color: t.textSec)),
+                                    Text(
+                                      '$minutes min planned',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: t.textSec,
+                                      ),
+                                    ),
                                     Container(
-                                      decoration: BoxDecoration(color: t.accent, borderRadius: BorderRadius.circular(20)),
-                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                                      decoration: BoxDecoration(
+                                        color: t.accent,
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 7,
+                                      ),
                                       child: Row(
                                         children: const [
-                                          Icon(Icons.play_arrow, size: 12, color: Colors.white),
+                                          Icon(
+                                            Icons.play_arrow,
+                                            size: 12,
+                                            color: Colors.white,
+                                          ),
                                           SizedBox(width: 6),
-                                          Text('Start', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white)),
+                                          Text(
+                                            'Start',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: Colors.white,
+                                            ),
+                                          ),
                                         ],
                                       ),
                                     ),
@@ -137,51 +435,181 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 ),
                               ],
                             ),
-                      ),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
               ),
 
-              // Coming Up
+              // Coming Up (dynamic)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SectionHeader(label: 'Coming Up', t: t),
-                    Container(
-                      decoration: BoxDecoration(
-                        color: t.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: t.border),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
-                      ),
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        children: [
-                          const AlbumArt(seed: 1, size: 40, radius: 12),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                    StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: _getPracticeTasksStream(),
+                      builder: (context, snap) {
+                        final todayStr =
+                            '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
+                        if (!snap.hasData || snap.data!.isEmpty) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                              'No upcoming tasks',
+                              style: TextStyle(color: t.textSec),
+                            ),
+                          );
+                        }
+
+                        final tasks = snap.data!;
+                        final upcoming = tasks
+                            .where(
+                              (e) =>
+                                  (e['dayId'] as String).compareTo(todayStr) >
+                                  0,
+                            )
+                            .toList();
+                        if (upcoming.isEmpty) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(16),
+                            child: Text(
+                              'No upcoming tasks',
+                              style: TextStyle(color: t.textSec),
+                            ),
+                          );
+                        }
+
+                        final Map<String, dynamic> next = upcoming.first;
+                        final song =
+                            next['songTitle'] ?? next['title'] ?? 'Upcoming';
+                        final artist = next['artist'] ?? '';
+                        final desc = next['title'] ?? '';
+                        DateTime? itemDate;
+                        try {
+                          itemDate = DateTime.parse(next['dayId']);
+                        } catch (_) {
+                          itemDate = null;
+                        }
+                        final daysAway = itemDate != null
+                            ? itemDate
+                                  .difference(
+                                    DateTime(
+                                      _today.year,
+                                      _today.month,
+                                      _today.day,
+                                    ),
+                                  )
+                                  .inDays
+                            : null;
+
+                        return GestureDetector(
+                          onTap: () => setState(() {
+                            _selectedTask = next;
+                            _showTodayDetail = true;
+                          }),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
                               children: [
-                                Text('Blackbird', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.text)),
-                                Text('The Beatles', style: TextStyle(fontSize: 12, color: t.textSec)),
-                                const SizedBox(height: 2),
-                                Text('Bars 1–8 fingerpicking', style: TextStyle(fontSize: 11, color: t.textMuted)),
+                                const AlbumArt(seed: 1, size: 40, radius: 12),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        song,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: t.text,
+                                        ),
+                                      ),
+                                      if (artist.isNotEmpty)
+                                        Text(
+                                          artist,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: t.textSec,
+                                          ),
+                                        ),
+                                      const SizedBox(height: 2),
+                                      if (desc.isNotEmpty)
+                                        Text(
+                                          desc,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: t.textMuted,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      daysAway != null
+                                          ? 'In ${daysAway} days'
+                                          : '',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: t.accent,
+                                      ),
+                                    ),
+                                    Text(
+                                      next['minutes']?.toString() ?? '',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: t.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ],
                             ),
                           ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text('In 3 days', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: t.accent)),
-                              Text('2:18', style: TextStyle(fontSize: 11, color: t.textMuted)),
-                            ],
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -202,115 +630,247 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         spacing: 14,
                         runSpacing: 6,
                         children: [
-                          _LegendDot(color: const Color(0xFF7A9E7A), label: 'Practiced', soft: false, t: t),
-                          _LegendDot(color: const Color(0xFFB07868), label: 'Missed', soft: false, t: t),
-                          _LegendDot(color: t.accent, label: 'Today', soft: false, t: t),
-                          _LegendDot(color: t.accentMid, label: 'Upcoming', soft: true, t: t),
+                          _LegendDot(
+                            color: const Color(0xFF7A9E7A),
+                            label: 'Practiced',
+                            soft: false,
+                            t: t,
+                          ),
+                          _LegendDot(
+                            color: const Color(0xFFB07868),
+                            label: 'Missed',
+                            soft: false,
+                            t: t,
+                          ),
+                          _LegendDot(
+                            color: t.accent,
+                            label: 'Today',
+                            soft: false,
+                            t: t,
+                          ),
+                          _LegendDot(
+                            color: t.accentMid,
+                            label: 'Upcoming',
+                            soft: true,
+                            t: t,
+                          ),
                         ],
                       ),
                     ),
 
-                    Container(
-                      decoration: BoxDecoration(
-                        color: t.surface,
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(color: t.border),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
-                      ),
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
-                          // Month nav
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              GestureDetector(
-                                onTap: () => setState(() {
-                                  if (_month == 1) { _month = 12; _year--; } else { _month--; }
-                                }),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  child: Text('‹', style: TextStyle(fontSize: 20, color: t.textSec)),
-                                ),
-                              ),
-                              Text('${monthNames[_month - 1]} $_year',
-                                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: t.text)),
-                              GestureDetector(
-                                onTap: () => setState(() {
-                                  if (_month == 12) { _month = 1; _year++; } else { _month++; }
-                                }),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  child: Text('›', style: TextStyle(fontSize: 20, color: t.textSec)),
-                                ),
+                    StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: _getPracticeDaysStream(),
+                      builder: (context, snapshot) {
+                        final practicedDays = <int>{};
+                        final missedDays = <int>{};
+                        final upcomingDays = <int>{};
+
+                        if (snapshot.hasData) {
+                          for (var dayData in snapshot.data!) {
+                            final dateStr = dayData['date'] as String;
+                            final status = dayData['status'] as String;
+                            final dayInt = int.parse(dateStr.substring(8, 10));
+                            if (status == 'completed')
+                              practicedDays.add(dayInt);
+                            else if (status == 'missed')
+                              missedDays.add(dayInt);
+                            else if (status == 'planned')
+                              upcomingDays.add(dayInt);
+                          }
+                        }
+
+                        Color getDynamicDayColor(int day) {
+                          final isToday =
+                              day == _today.day &&
+                              _month == _today.month &&
+                              _year == _today.year;
+                          final isPast =
+                              _year < _today.year ||
+                              _month < _today.month ||
+                              (_month == _today.month && day < _today.day);
+                          if (isToday) return t.accent;
+                          if (isPast && practicedDays.contains(day))
+                            return const Color(0xFF7A9E7A);
+                          if (isPast && missedDays.contains(day))
+                            return const Color(0xFFB07868);
+                          if (!isPast && upcomingDays.contains(day))
+                            return t.accent;
+                          return Colors.transparent;
+                        }
+
+                        return Container(
+                          decoration: BoxDecoration(
+                            color: t.surface,
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: t.border),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.06),
+                                blurRadius: 4,
                               ),
                             ],
                           ),
-                          const SizedBox(height: 14),
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              // Month nav
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  GestureDetector(
+                                    onTap: () => setState(() {
+                                      if (_month == 1) {
+                                        _month = 12;
+                                        _year--;
+                                      } else {
+                                        _month--;
+                                      }
+                                    }),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 4,
+                                      ),
+                                      child: Text(
+                                        '‹',
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          color: t.textSec,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    '${monthNames[_month - 1]} $_year',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: t.text,
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () => setState(() {
+                                      if (_month == 12) {
+                                        _month = 1;
+                                        _year++;
+                                      } else {
+                                        _month++;
+                                      }
+                                    }),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 4,
+                                      ),
+                                      child: Text(
+                                        '›',
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          color: t.textSec,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
 
-                          // Day headers
-                          Row(
-                            children: ['S','M','T','W','T','F','S']
-                                .map((d) => Expanded(
-                                      child: Center(
-                                        child: Text(d,
+                              // Day headers
+                              Row(
+                                children: ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+                                    .map(
+                                      (d) => Expanded(
+                                        child: Center(
+                                          child: Text(
+                                            d,
                                             style: TextStyle(
                                               fontSize: 11,
                                               fontWeight: FontWeight.w600,
                                               color: t.textMuted,
-                                            )),
+                                            ),
+                                          ),
+                                        ),
                                       ),
-                                    ))
-                                .toList(),
-                          ),
-                          const SizedBox(height: 6),
+                                    )
+                                    .toList(),
+                              ),
+                              const SizedBox(height: 6),
 
-                          // Days grid
-                          GridView.builder(
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 7,
-                              mainAxisSpacing: 2,
-                              crossAxisSpacing: 2,
-                              childAspectRatio: 1,
-                            ),
-                            itemCount: firstDay + daysInMonth,
-                            itemBuilder: (ctx, i) {
-                              if (i < firstDay) return const SizedBox();
-                              final day = i - firstDay + 1;
-                              final bgColor = _dayColor(day);
-                              final textColor = _dayTextColor(day);
-                              final border = _hasBorder(day);
-                              return Center(
-                                child: Container(
-                                  width: 32, height: 32,
-                                  decoration: BoxDecoration(
-                                    color: bgColor == Colors.transparent ? null : bgColor.withValues(
-                                      alpha: bgColor == t.accent && !(day == _today.day && _month == _today.month) ? 0.13 : 1.0,
+                              // Days grid
+                              GridView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                gridDelegate:
+                                    const SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: 7,
+                                      mainAxisSpacing: 2,
+                                      crossAxisSpacing: 2,
+                                      childAspectRatio: 1,
                                     ),
-                                    shape: BoxShape.circle,
-                                    border: border ? Border.all(
-                                      color: bgColor.withValues(alpha: 0.3),
-                                      width: 1.5,
-                                    ) : null,
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      '$day',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: day == _today.day && _month == _today.month ? FontWeight.w700 : FontWeight.w400,
-                                        color: day == _today.day && _month == _today.month ? Colors.white : textColor,
+                                itemCount: firstDay + daysInMonth,
+                                itemBuilder: (ctx, i) {
+                                  if (i < firstDay) return const SizedBox();
+                                  final day = i - firstDay + 1;
+                                  final bgColor = getDynamicDayColor(day);
+                                  final isToday =
+                                      day == _today.day &&
+                                      _month == _today.month &&
+                                      _year == _today.year;
+                                  final textColor = isToday
+                                      ? Colors.white
+                                      : (bgColor == Colors.transparent
+                                            ? t.text
+                                            : Colors.white);
+                                  final border =
+                                      bgColor != Colors.transparent && !isToday;
+
+                                  return Center(
+                                    child: Container(
+                                      width: 32,
+                                      height: 32,
+                                      decoration: BoxDecoration(
+                                        color: bgColor == Colors.transparent
+                                            ? null
+                                            : bgColor.withValues(
+                                                alpha:
+                                                    bgColor == t.accent &&
+                                                        !isToday
+                                                    ? 0.13
+                                                    : 1.0,
+                                              ),
+                                        shape: BoxShape.circle,
+                                        border: border
+                                            ? Border.all(
+                                                color: bgColor.withValues(
+                                                  alpha: 0.3,
+                                                ),
+                                                width: 1.5,
+                                              )
+                                            : null,
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          '$day',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: isToday
+                                                ? FontWeight.w700
+                                                : FontWeight.w400,
+                                            color: isToday
+                                                ? Colors.white
+                                                : textColor,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                              );
-                            },
+                                  );
+                                },
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -320,7 +880,72 @@ class _CalendarScreenState extends State<CalendarScreen> {
         ),
 
         // Today's detail bottom sheet
-        if (_showTodayDetail) _TodayDetailSheet(t: t, navigate: widget.navigate, onClose: () => setState(() => _showTodayDetail = false)),
+        if (_showTodayDetail)
+          _TodayDetailSheet(
+            t: t,
+            navigate: widget.navigate,
+            task: _selectedTask,
+            onClose: () => setState(() => _showTodayDetail = false),
+          ),
+        // UpdatePlan progress overlay
+        if (_isUpdatingPlan)
+          Positioned.fill(
+            child: Container(
+              color: Colors.black.withOpacity(0.35),
+              child: Center(
+                child: Container(
+                  width: 320,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: t.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: t.border),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Updating plan',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: t.text,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ProgressBar(progress: _updateProgress, t: t),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey.shade300,
+                            ),
+                            onPressed: () {
+                              setState(() => _cancelUpdateRequested = true);
+                              setState(() => _isUpdatingPlan = false);
+                            },
+                            child: const Text('Cancel'),
+                          ),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: t.accent,
+                            ),
+                            onPressed: () {
+                              setState(() => _notifyLaterRequested = true);
+                              setState(() => _isUpdatingPlan = false);
+                            },
+                            child: const Text('Notify Later'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -332,7 +957,12 @@ class _LegendDot extends StatelessWidget {
   final bool soft;
   final AppTheme t;
 
-  const _LegendDot({required this.color, required this.label, required this.soft, required this.t});
+  const _LegendDot({
+    required this.color,
+    required this.label,
+    required this.soft,
+    required this.t,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -340,11 +970,14 @@ class _LegendDot extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 10, height: 10,
+          width: 10,
+          height: 10,
           decoration: BoxDecoration(
             color: soft ? color.withValues(alpha: 0.2) : color,
             borderRadius: BorderRadius.circular(3),
-            border: soft ? Border.all(color: color.withValues(alpha: 0.3), width: 1.5) : null,
+            border: soft
+                ? Border.all(color: color.withValues(alpha: 0.3), width: 1.5)
+                : null,
           ),
         ),
         const SizedBox(width: 5),
@@ -357,9 +990,15 @@ class _LegendDot extends StatelessWidget {
 class _TodayDetailSheet extends StatelessWidget {
   final AppTheme t;
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
+  final Map<String, dynamic>? task;
   final VoidCallback onClose;
 
-  const _TodayDetailSheet({required this.t, required this.navigate, required this.onClose});
+  const _TodayDetailSheet({
+    required this.t,
+    required this.navigate,
+    required this.onClose,
+    this.task,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -374,7 +1013,9 @@ class _TodayDetailSheet extends StatelessWidget {
             width: double.infinity,
             decoration: BoxDecoration(
               color: t.surface,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24),
+              ),
             ),
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 36),
             child: Column(
@@ -383,8 +1024,12 @@ class _TodayDetailSheet extends StatelessWidget {
               children: [
                 Center(
                   child: Container(
-                    width: 36, height: 4,
-                    decoration: BoxDecoration(color: t.border, borderRadius: BorderRadius.circular(2)),
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: t.border,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 20),
@@ -395,11 +1040,28 @@ class _TodayDetailSheet extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text("Today's Practice",
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: t.textMuted, letterSpacing: 0.7)),
+                        Text(
+                          "Today's Practice",
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: t.textMuted,
+                            letterSpacing: 0.7,
+                          ),
+                        ),
                         const SizedBox(height: 2),
-                        Text('Wonderwall', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: t.text)),
-                        Text('Oasis · 87 BPM', style: TextStyle(fontSize: 14, color: t.textSec)),
+                        Text(
+                          task?['songTitle'] ?? task?['title'] ?? 'Practice',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: t.text,
+                          ),
+                        ),
+                        Text(
+                          '${task?['artist'] ?? ''}${(task?['artist'] != null && task?['bpm'] != null) ? ' · ${task?['bpm']} BPM' : (task?['bpm'] != null ? '${task?['bpm']} BPM' : '')}',
+                          style: TextStyle(fontSize: 14, color: t.textSec),
+                        ),
                       ],
                     ),
                   ],
@@ -407,14 +1069,34 @@ class _TodayDetailSheet extends StatelessWidget {
                 const SizedBox(height: 18),
                 Container(
                   width: double.infinity,
-                  decoration: BoxDecoration(color: t.surfaceAlt, borderRadius: BorderRadius.circular(14)),
+                  decoration: BoxDecoration(
+                    color: t.surfaceAlt,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('FOCUS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: t.textMuted, letterSpacing: 0.7)),
+                      Text(
+                        'FOCUS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: t.textMuted,
+                          letterSpacing: 0.7,
+                        ),
+                      ),
                       const SizedBox(height: 6),
-                      Text('Focus on chord transitions, bars 9–16', style: TextStyle(fontSize: 14, color: t.text, height: 1.5)),
+                      Text(
+                        task?['instructions'] ??
+                            task?['focus'] ??
+                            'Focus on the next practice items.',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: t.text,
+                          height: 1.5,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -423,13 +1105,29 @@ class _TodayDetailSheet extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Container(
-                        decoration: BoxDecoration(color: t.surfaceAlt, borderRadius: BorderRadius.circular(12)),
+                        decoration: BoxDecoration(
+                          color: t.surfaceAlt,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         padding: const EdgeInsets.all(14),
                         child: Column(
                           children: [
-                            Text('20 min', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: t.text)),
+                            Text(
+                              '${task?['minutes']?.toString() ?? '20'} min',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: t.text,
+                              ),
+                            ),
                             const SizedBox(height: 2),
-                            Text('Planned', style: TextStyle(fontSize: 11, color: t.textMuted)),
+                            Text(
+                              'Planned',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: t.textMuted,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -437,13 +1135,29 @@ class _TodayDetailSheet extends StatelessWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Container(
-                        decoration: BoxDecoration(color: t.surfaceAlt, borderRadius: BorderRadius.circular(12)),
+                        decoration: BoxDecoration(
+                          color: t.surfaceAlt,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         padding: const EdgeInsets.all(14),
                         child: Column(
                           children: [
-                            Text('87', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: t.text)),
+                            Text(
+                              '${task?['bpm']?.toString() ?? ''}',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: t.text,
+                              ),
+                            ),
                             const SizedBox(height: 2),
-                            Text('BPM', style: TextStyle(fontSize: 11, color: t.textMuted)),
+                            Text(
+                              'BPM',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: t.textMuted,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -456,14 +1170,34 @@ class _TodayDetailSheet extends StatelessWidget {
                   child: ElevatedButton.icon(
                     onPressed: () {
                       onClose();
-                      navigate('practicing', props: {'title': 'Wonderwall', 'artist': 'Oasis', 'bpm': 87});
+                      navigate(
+                        'practicing',
+                        props: {
+                          'title': task?['songTitle'] ?? task?['title'],
+                          'artist': task?['artist'],
+                          'bpm': task?['bpm'],
+                        },
+                      );
                     },
-                    icon: const Icon(Icons.play_arrow, size: 14, color: Colors.white),
-                    label: const Text('Start Practice', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                    icon: const Icon(
+                      Icons.play_arrow,
+                      size: 14,
+                      color: Colors.white,
+                    ),
+                    label: const Text(
+                      'Start Practice',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.accent,
                       padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                   ),
                 ),

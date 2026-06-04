@@ -87,12 +87,14 @@ class _FretwiseShellState extends State<FretwiseShell> {
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
     if (dest == 'sessionComplete' && props != null) {
-      context.read<AppState>().addDiaryEntry(DiaryEntry(
-        date: DateTime.now(),
-        title: props['title'] as String? ?? '',
-        artist: props['artist'] as String? ?? '',
-        duration: props['duration'] as int? ?? 0,
-      ));
+      context.read<AppState>().addDiaryEntry(
+        DiaryEntry(
+          date: DateTime.now(),
+          title: props['title'] as String? ?? '',
+          artist: props['artist'] as String? ?? '',
+          duration: props['duration'] as int? ?? 0,
+        ),
+      );
     }
     setState(() {
       _screenProps = props;
@@ -101,7 +103,10 @@ class _FretwiseShellState extends State<FretwiseShell> {
     });
   }
 
-  void _openAI() => setState(() { _prevScreen = _screen; _showAI = true; });
+  void _openAI() => setState(() {
+    _prevScreen = _screen;
+    _showAI = true;
+  });
   void _closeAI() => setState(() => _showAI = false);
 
   bool get _isOverlay => _overlayScreens.contains(_screen);
@@ -113,10 +118,14 @@ class _FretwiseShellState extends State<FretwiseShell> {
     final state = context.watch<AppState>();
     final t = state.theme;
 
-    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: state.darkMode ? Brightness.light : Brightness.dark,
-    ));
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: state.darkMode
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+    );
 
     return Scaffold(
       backgroundColor: t.bg,
@@ -128,10 +137,15 @@ class _FretwiseShellState extends State<FretwiseShell> {
               children: [
                 Expanded(
                   child: _showAI
-                      ? AIChatScreen(t: t, fromScreen: _prevScreen, onClose: _closeAI)
+                      ? AIChatScreen(
+                          t: t,
+                          fromScreen: _prevScreen,
+                          onClose: _closeAI,
+                        )
                       : _buildScreen(t, state),
                 ),
-                if (_showNav) _BottomNavBar(active: _screen, navigate: _navigate, t: t),
+                if (_showNav)
+                  _BottomNavBar(active: _screen, navigate: _navigate, t: t),
               ],
             ),
 
@@ -146,8 +160,14 @@ class _FretwiseShellState extends State<FretwiseShell> {
                     const fab = 52.0;
                     setState(() {
                       _fabPos = Offset(
-                        (_fabPos.dx - details.delta.dx).clamp(0, size.width - fab),
-                        (_fabPos.dy - details.delta.dy).clamp(0, size.height - fab),
+                        (_fabPos.dx - details.delta.dx).clamp(
+                          0,
+                          size.width - fab,
+                        ),
+                        (_fabPos.dy - details.delta.dy).clamp(
+                          0,
+                          size.height - fab,
+                        ),
                       );
                     });
                   },
@@ -171,7 +191,11 @@ class _FretwiseShellState extends State<FretwiseShell> {
                         ),
                       ],
                     ),
-                    child: const Icon(Icons.chat_bubble_outline, size: 22, color: Colors.white),
+                    child: const Icon(
+                      Icons.chat_bubble_outline,
+                      size: 22,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -207,7 +231,13 @@ class _FretwiseShellState extends State<FretwiseShell> {
         );
 
       case 'profile':
-        return ProfileScreen(t: t, navigate: _navigate, coins: state.coins, ownedItems: state.ownedItems, diaryEntries: state.diaryEntries);
+        return ProfileScreen(
+          t: t,
+          navigate: _navigate,
+          coins: state.coins,
+          ownedItems: state.ownedItems,
+          diaryEntries: state.diaryEntries,
+        );
 
       case 'practicing':
         return PracticingScreen(
@@ -227,7 +257,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
           artist: props['artist'] as String? ?? 'Oasis',
           duration: props['duration'] as int? ?? 0,
           onOpenAI: _openAI,
-          onSaveNote: (note) => context.read<AppState>().updateLatestDiaryNote(note),
+          onSaveNote: (note) =>
+              context.read<AppState>().updateLatestDiaryNote(note),
         );
 
       case 'inspiration':
@@ -245,7 +276,11 @@ class _BottomNavBar extends StatelessWidget {
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
   final AppTheme t;
 
-  const _BottomNavBar({required this.active, required this.navigate, required this.t});
+  const _BottomNavBar({
+    required this.active,
+    required this.navigate,
+    required this.t,
+  });
 
   static const _tabs = [
     (id: 'shop', label: 'Shop', icon: Icons.storefront_outlined),
@@ -287,13 +322,19 @@ class _BottomNavBar extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          Icon(tab.icon, size: 24, color: isActive ? t.accent : t.textMuted),
+                          Icon(
+                            tab.icon,
+                            size: 24,
+                            color: isActive ? t.accent : t.textMuted,
+                          ),
                           const SizedBox(height: 3),
                           Text(
                             tab.label,
                             style: TextStyle(
                               fontSize: 10,
-                              fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                              fontWeight: isActive
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
                               color: isActive ? t.accent : t.textMuted,
                             ),
                           ),

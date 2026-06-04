@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Fretwise needs access to your calendar to schedule personalized practice sessions around your free time.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Fretwise needs full access to your calendar to intelligently plan your guitar practice schedule.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Fretwise uses your microphone to detect your guitar pitch for real-time tuning.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
