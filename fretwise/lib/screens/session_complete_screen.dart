@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../utils/song_id.dart';
 
 class SessionCompleteScreen extends StatefulWidget {
   final AppTheme t;
@@ -31,6 +35,9 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
   bool _showDeadlineModal = false;
   String _deadlineDate = '';
   bool _deadlineSaved = false;
+  Map<String, dynamic>? _aiResponse;
+  bool _applyingPatch = false;
+  bool _showAiModal = false;
 
   AppTheme get t => widget.t;
 
@@ -43,6 +50,75 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
   void dispose() {
     _feedbackCtrl.dispose();
     super.dispose();
+  }
+
+  // song id helper moved to lib/utils/song_id.dart
+
+  Future<void> _handleSaveAndNavigate() async {
+    widget.onSaveNote?.call(_feedbackCtrl.text.trim());
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final callable = FirebaseFunctions.instance.httpsCallable(
+          'recordSession',
+        );
+        final payload = {
+          'song': {
+            'title': widget.title,
+            'artist': widget.artist,
+            'progressPercent': 0,
+            'defaultSectionLabel': null,
+            'deadlineDate': _deadlineDate.isEmpty ? null : _deadlineDate,
+          },
+          'songProfile': null,
+          'profile': null,
+          'userThoughts': {
+            'practiceDate': DateTime.now().toIso8601String().split('T')[0],
+            'durationSec': widget.duration,
+            'userNote': _feedbackCtrl.text.trim().isEmpty
+                ? null
+                : _feedbackCtrl.text.trim(),
+            'deadlineDate': _deadlineDate.isEmpty ? null : _deadlineDate,
+            'recordingUrls': [],
+            'startedAt': null,
+            'endedAt': 'SERVER_TIMESTAMP',
+          },
+        };
+
+        final result = await callable.call(payload);
+        print('recordSession result: ${result.data}');
+        _aiResponse = result.data as Map<String, dynamic>?;
+        _showAiModal = true;
+
+        // Best-effort: set firstCompleteDate on user's songProfiles doc if missing
+        final songId = makeSongId(widget.title, widget.artist);
+        final docRef = FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('songProfiles')
+            .doc(songId);
+        final doc = await docRef.get();
+        final nowDate = DateTime.now().toIso8601String().split('T')[0];
+        if (!doc.exists) {
+          await docRef.set({
+            'firstCompleteDate': nowDate,
+            'title': widget.title,
+            'artist': widget.artist,
+          });
+        } else {
+          final data = doc.data();
+          if (data != null &&
+              (data['firstCompleteDate'] == null ||
+                  data['firstCompleteDate'] == '')) {
+            await docRef.update({'firstCompleteDate': nowDate});
+          }
+        }
+      }
+    } catch (e) {
+      print('recordSession error: $e');
+    }
+
+    // navigation will occur after user chooses in AI modal
   }
 
   @override
@@ -58,13 +134,30 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
                 child: Column(
                   children: [
-                    Text('Session Complete',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: t.textMuted, letterSpacing: 0.8)),
+                    Text(
+                      'Session Complete',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: t.textMuted,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
                     const SizedBox(height: 6),
-                    Text(widget.title,
-                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: t.text, fontFamily: 'Georgia')),
+                    Text(
+                      widget.title,
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: t.text,
+                        fontFamily: 'Georgia',
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text(widget.artist, style: TextStyle(fontSize: 13, color: t.textSec)),
+                    Text(
+                      widget.artist,
+                      style: TextStyle(fontSize: 13, color: t.textSec),
+                    ),
                   ],
                 ),
               ),
@@ -77,7 +170,12 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     color: t.surface,
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: t.border),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 4,
+                      ),
+                    ],
                   ),
                   child: IntrinsicHeight(
                     child: Row(
@@ -87,32 +185,62 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             padding: const EdgeInsets.all(18),
                             child: Column(
                               children: [
-                                Text('THIS SESSION',
-                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: t.textMuted, letterSpacing: 0.7)),
+                                Text(
+                                  'THIS SESSION',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: t.textMuted,
+                                    letterSpacing: 0.7,
+                                  ),
+                                ),
                                 const SizedBox(height: 6),
-                                Text(_fmt(widget.duration),
-                                    style: TextStyle(
-                                      fontSize: 32,
-                                      fontWeight: FontWeight.w900,
-                                      color: t.text,
-                                      letterSpacing: -1,
-                                      fontFeatures: const [FontFeature.tabularFigures()],
-                                    )),
+                                Text(
+                                  _fmt(widget.duration),
+                                  style: TextStyle(
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w900,
+                                    color: t.text,
+                                    letterSpacing: -1,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                                ),
                               ],
                             ),
                           ),
                         ),
-                        VerticalDivider(color: t.border, width: 1, indent: 14, endIndent: 14),
+                        VerticalDivider(
+                          color: t.border,
+                          width: 1,
+                          indent: 14,
+                          endIndent: 14,
+                        ),
                         Expanded(
                           child: Padding(
                             padding: const EdgeInsets.all(18),
                             child: Column(
                               children: [
-                                Text('TOTAL ON SONG',
-                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: t.textMuted, letterSpacing: 0.7)),
+                                Text(
+                                  'TOTAL ON SONG',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: t.textMuted,
+                                    letterSpacing: 0.7,
+                                  ),
+                                ),
                                 const SizedBox(height: 6),
-                                Text('4h 25m',
-                                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: t.text, letterSpacing: -1)),
+                                Text(
+                                  '4h 25m',
+                                  style: TextStyle(
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w900,
+                                    color: t.text,
+                                    letterSpacing: -1,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -131,9 +259,17 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     color: t.surface,
                     borderRadius: BorderRadius.circular(18),
                     border: Border.all(color: t.border),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 4,
+                      ),
+                    ],
                   ),
-                  padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 18,
+                    horizontal: 20,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -141,10 +277,23 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                       const SizedBox(width: 12),
                       Text(
                         '+$_starsEarned',
-                        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: AppColors.gold, letterSpacing: -1, height: 1),
+                        style: const TextStyle(
+                          fontSize: 40,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.gold,
+                          letterSpacing: -1,
+                          height: 1,
+                        ),
                       ),
                       const SizedBox(width: 12),
-                      Text('stars earned', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: t.textSec)),
+                      Text(
+                        'stars earned',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: t.textSec,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -156,15 +305,26 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('How was the practice?',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: t.text)),
+                    Text(
+                      'How was the practice?',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: t.text,
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     Container(
                       decoration: BoxDecoration(
                         color: t.surface,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: t.border),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.06),
+                            blurRadius: 4,
+                          ),
+                        ],
                       ),
                       padding: const EdgeInsets.all(16),
                       child: Column(
@@ -172,7 +332,11 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                           TextField(
                             controller: _feedbackCtrl,
                             maxLines: 4,
-                            style: TextStyle(fontSize: 14, color: t.text, height: 1.6),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: t.text,
+                              height: 1.6,
+                            ),
                             decoration: InputDecoration(
                               hintText: 'Type or tap the mic to speak…',
                               hintStyle: TextStyle(color: t.textMuted),
@@ -185,15 +349,25 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
                               GestureDetector(
-                                onTap: () => setState(() => _recording = !_recording),
+                                onTap: () =>
+                                    setState(() => _recording = !_recording),
                                 child: AnimatedContainer(
                                   duration: const Duration(milliseconds: 200),
-                                  width: 36, height: 36,
+                                  width: 36,
+                                  height: 36,
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
-                                    color: _recording ? AppColors.red : t.surfaceAlt,
+                                    color: _recording
+                                        ? AppColors.red
+                                        : t.surfaceAlt,
                                   ),
-                                  child: Icon(Icons.mic, size: 16, color: _recording ? Colors.white : t.textSec),
+                                  child: Icon(
+                                    Icons.mic,
+                                    size: 16,
+                                    color: _recording
+                                        ? Colors.white
+                                        : t.textSec,
+                                  ),
                                 ),
                               ),
                             ],
@@ -206,11 +380,22 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                       Row(
                         children: [
                           Container(
-                            width: 8, height: 8,
-                            decoration: const BoxDecoration(shape: BoxShape.circle, color: AppColors.red),
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.red,
+                            ),
                           ),
                           const SizedBox(width: 8),
-                          const Text('Listening…', style: TextStyle(fontSize: 12, color: AppColors.red, fontWeight: FontWeight.w600)),
+                          const Text(
+                            'Listening…',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppColors.red,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -228,15 +413,27 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                           ),
                           ElevatedButton.icon(
                             onPressed: widget.onOpenAI,
-                            icon: const Icon(Icons.chat_bubble_outline, size: 16, color: Colors.white),
-                            label: const Text('Ask AI Coach about this session',
-                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white)),
+                            icon: const Icon(
+                              Icons.chat_bubble_outline,
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                            label: const Text(
+                              'Ask AI Coach about this session',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.transparent,
                               shadowColor: Colors.transparent,
                               minimumSize: const Size(double.infinity, 46),
                               padding: const EdgeInsets.symmetric(vertical: 13),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
                               elevation: 0,
                             ),
                           ),
@@ -255,18 +452,23 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () {
-                          widget.onSaveNote?.call(_feedbackCtrl.text.trim());
-                          widget.navigate('home');
-                        },
+                        onPressed: () => _handleSaveAndNavigate(),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: t.accent,
                           padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                           elevation: 0,
                         ),
-                        child: const Text('Back to Home',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.white)),
+                        child: const Text(
+                          'Back to Home',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -280,10 +482,18 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: t.border, width: 1.5),
                           padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
                         ),
-                        child: Text('Go to my Library',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: t.text)),
+                        child: Text(
+                          'Go to my Library',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: t.text,
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -306,7 +516,9 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                   width: double.infinity,
                   decoration: BoxDecoration(
                     color: t.surface,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(28),
+                    ),
                   ),
                   padding: const EdgeInsets.fromLTRB(24, 8, 24, 40),
                   child: Column(
@@ -315,41 +527,83 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     children: [
                       Center(
                         child: Container(
-                          width: 36, height: 4, margin: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(color: t.border, borderRadius: BorderRadius.circular(2)),
+                          width: 36,
+                          height: 4,
+                          margin: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: t.border,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
                         ),
                       ),
                       Container(
-                        width: 54, height: 54,
+                        width: 54,
+                        height: 54,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(17),
-                          gradient: LinearGradient(colors: [t.accent.withValues(alpha: 0.13), t.accent.withValues(alpha: 0.27)]),
+                          gradient: LinearGradient(
+                            colors: [
+                              t.accent.withValues(alpha: 0.13),
+                              t.accent.withValues(alpha: 0.27),
+                            ],
+                          ),
                         ),
-                        child: Icon(Icons.calendar_today, size: 26, color: t.accent),
+                        child: Icon(
+                          Icons.calendar_today,
+                          size: 26,
+                          color: t.accent,
+                        ),
                       ),
                       const SizedBox(height: 18),
-                      Text('Do you have a performance coming up?',
-                          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: t.text, fontFamily: 'Georgia', height: 1.2)),
+                      Text(
+                        'Do you have a performance coming up?',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          color: t.text,
+                          fontFamily: 'Georgia',
+                          height: 1.2,
+                        ),
+                      ),
                       const SizedBox(height: 8),
                       Text(
                         'This is your first time practicing ${widget.title}. Set a deadline and we\'ll build a practice schedule to get you ready.',
-                        style: TextStyle(fontSize: 14, color: t.textSec, height: 1.6),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: t.textSec,
+                          height: 1.6,
+                        ),
                       ),
                       const SizedBox(height: 24),
                       if (!_deadlineSaved) ...[
-                        Text('PERFORMANCE DATE',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.textMuted, letterSpacing: 0.8)),
+                        Text(
+                          'PERFORMANCE DATE',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: t.textMuted,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
                         const SizedBox(height: 8),
                         GestureDetector(
                           onTap: () async {
                             final picked = await showDatePicker(
                               context: context,
-                              initialDate: DateTime.now().add(const Duration(days: 30)),
+                              initialDate: DateTime.now().add(
+                                const Duration(days: 30),
+                              ),
                               firstDate: DateTime.now(),
-                              lastDate: DateTime.now().add(const Duration(days: 365)),
+                              lastDate: DateTime.now().add(
+                                const Duration(days: 365),
+                              ),
                             );
                             if (picked != null) {
-                              setState(() => _deadlineDate = picked.toIso8601String().split('T')[0]);
+                              setState(
+                                () => _deadlineDate = picked
+                                    .toIso8601String()
+                                    .split('T')[0],
+                              );
                             }
                           },
                           child: Container(
@@ -357,12 +611,24 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             decoration: BoxDecoration(
                               color: t.surfaceAlt,
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: _deadlineDate.isNotEmpty ? t.accent : t.border, width: 1.5),
+                              border: Border.all(
+                                color: _deadlineDate.isNotEmpty
+                                    ? t.accent
+                                    : t.border,
+                                width: 1.5,
+                              ),
                             ),
                             padding: const EdgeInsets.all(13),
                             child: Text(
-                              _deadlineDate.isEmpty ? 'Select a date' : _deadlineDate,
-                              style: TextStyle(fontSize: 15, color: _deadlineDate.isEmpty ? t.textMuted : t.text),
+                              _deadlineDate.isEmpty
+                                  ? 'Select a date'
+                                  : _deadlineDate,
+                              style: TextStyle(
+                                fontSize: 15,
+                                color: _deadlineDate.isEmpty
+                                    ? t.textMuted
+                                    : t.text,
+                              ),
                             ),
                           ),
                         ),
@@ -370,27 +636,45 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton(
-                            onPressed: _deadlineDate.isEmpty ? null : () => setState(() => _deadlineSaved = true),
+                            onPressed: _deadlineDate.isEmpty
+                                ? null
+                                : () => setState(() => _deadlineSaved = true),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: _deadlineDate.isNotEmpty ? t.accent : t.surfaceAlt,
+                              backgroundColor: _deadlineDate.isNotEmpty
+                                  ? t.accent
+                                  : t.surfaceAlt,
                               padding: const EdgeInsets.symmetric(vertical: 15),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
                               elevation: 0,
                             ),
-                            child: Text('Set my deadline',
-                                style: TextStyle(
-                                  fontSize: 15, fontWeight: FontWeight.w700,
-                                  color: _deadlineDate.isNotEmpty ? Colors.white : t.textMuted,
-                                )),
+                            child: Text(
+                              'Set my deadline',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: _deadlineDate.isNotEmpty
+                                    ? Colors.white
+                                    : t.textMuted,
+                              ),
+                            ),
                           ),
                         ),
                         const SizedBox(height: 10),
                         SizedBox(
                           width: double.infinity,
                           child: TextButton(
-                            onPressed: () => setState(() => _showDeadlineModal = false),
-                            child: Text("No deadline, I'm just exploring",
-                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: t.textMuted)),
+                            onPressed: () =>
+                                setState(() => _showDeadlineModal = false),
+                            child: Text(
+                              "No deadline, I'm just exploring",
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: t.textMuted,
+                              ),
+                            ),
                           ),
                         ),
                       ] else ...[
@@ -400,19 +684,149 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             children: [
                               const Text('🎯', style: TextStyle(fontSize: 36)),
                               const SizedBox(height: 10),
-                              Text('Goal set for $_deadlineDate',
-                                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: t.text),
-                                  textAlign: TextAlign.center),
+                              Text(
+                                'Goal set for $_deadlineDate',
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  color: t.text,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
                               const SizedBox(height: 6),
-                              Text("We'll tailor your practice schedule to have you performance-ready in time.",
-                                  style: TextStyle(fontSize: 13, color: t.textSec, height: 1.5),
-                                  textAlign: TextAlign.center),
+                              Text(
+                                "We'll tailor your practice schedule to have you performance-ready in time.",
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: t.textSec,
+                                  height: 1.5,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
                             ],
                           ),
                         ),
                       ],
                     ],
                   ),
+                ),
+              ),
+            ),
+          ),
+
+        // AI session summary modal
+        if (_showAiModal && _aiResponse != null)
+          GestureDetector(
+            onTap: () {},
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.45),
+              alignment: Alignment.center,
+              child: Container(
+                width: 340,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: t.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: t.border),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'AI session summary',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: t.text,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (_aiResponse!['sessionInfo'] != null) ...[
+                      Text(
+                        _aiResponse!['sessionInfo']['aiComment'] ?? '',
+                        style: TextStyle(color: t.text),
+                      ),
+                      const SizedBox(height: 8),
+                      if ((_aiResponse!['sessionInfo']['nextFocus'] as List?)
+                              ?.isNotEmpty ??
+                          false) ...[
+                        Text(
+                          'Next focus:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: t.text,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        for (var f
+                            in (_aiResponse!['sessionInfo']['nextFocus']
+                                as List))
+                          Text('- $f', style: TextStyle(color: t.textSec)),
+                        const SizedBox(height: 8),
+                      ],
+                    ],
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () {
+                            setState(() {
+                              _showAiModal = false;
+                            });
+                            widget.navigate('home');
+                          },
+                          child: Text('Skip', style: TextStyle(color: t.text)),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: _applyingPatch
+                              ? null
+                              : () async {
+                                  setState(() => _applyingPatch = true);
+                                  try {
+                                    final user =
+                                        FirebaseAuth.instance.currentUser;
+                                    if (user != null) {
+                                      final callable = FirebaseFunctions
+                                          .instance
+                                          .httpsCallable('applyPatch');
+                                      final payload = {
+                                        'uid': user.uid,
+                                        'userProfilePatch':
+                                            _aiResponse!['userProfilePatch'],
+                                        'songProfilePatch':
+                                            _aiResponse!['songProfilePatch'],
+                                        'song':
+                                            _aiResponse!['song'] ??
+                                            {
+                                              'title': widget.title,
+                                              'artist': widget.artist,
+                                            },
+                                      };
+                                      final resp = await callable.call(payload);
+                                      print('applyPatch resp: ${resp.data}');
+                                    }
+                                  } catch (e) {
+                                    print('applyPatch error: $e');
+                                  }
+                                  setState(() => _applyingPatch = false);
+                                  setState(() => _showAiModal = false);
+                                  widget.navigate('home');
+                                },
+                          child: _applyingPatch
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('Apply Suggestions'),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
