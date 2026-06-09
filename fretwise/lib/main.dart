@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 
 // 👇 新增這兩行 Firebase 必備的 import
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart'; 
+import 'firebase_options.dart';
 
 import 'theme.dart';
 import 'models/app_state.dart';

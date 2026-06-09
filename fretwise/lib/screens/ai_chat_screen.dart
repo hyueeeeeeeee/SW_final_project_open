@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../theme.dart';
 
 class AIChatScreen extends StatefulWidget {
@@ -43,13 +44,6 @@ class _AIChatScreenState extends State<AIChatScreen> {
     'Song for beginners',
   ];
 
-  static const _responses = {
-    'How do I play F chord?': 'The F chord is one of the trickiest for beginners! Start with a partial barre on strings 1-2 at fret 1, then build up. Practice the barre slowly — your index finger needs time to build strength.',
-    '30-min practice plan': 'Try: 5 min warmup (chromatic exercises), 10 min technique (scales or a hard passage), 10 min song work, 5 min cool-down. Keep a timer and stay focused!',
-    'Fix barre chords': 'Three tips: 1) Place your finger close to the fret, 2) Use the bony edge of your finger, 3) Keep your thumb behind the middle finger. Daily 5-minute barre practice goes a long way!',
-    'Song for beginners': 'Try "Knockin\' on Heaven\'s Door" by Bob Dylan — just G, D, and Am/C. Or "Horse With No Name" by America with only two chords. Both are great for building confidence!',
-  };
-
   Future<void> _send([String? text]) async {
     final msg = text ?? _inputCtrl.text.trim();
     if (msg.isEmpty || _loading) return;
@@ -60,17 +54,30 @@ class _AIChatScreenState extends State<AIChatScreen> {
     });
     _scrollToBottom();
 
-    // Simulate a response
-    await Future.delayed(const Duration(milliseconds: 1200));
-    if (!mounted) return;
+    try {
+      // Everything in _messages except the user turn we just appended
+      final history = _messages
+          .take(_messages.length - 1)
+          .map((m) => {'role': m.role, 'text': m.text})
+          .toList();
 
-    final reply = _responses[msg] ??
-        'Great question! As your AI guitar coach, I\'d say: focus on consistency over intensity. Even 15 minutes daily beats a 2-hour weekend session. Keep playing! 🎸';
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('chatWithCoach')
+          .call({'message': msg, 'history': history});
 
-    setState(() {
-      _messages.add((role: 'assistant', text: reply));
-      _loading = false;
-    });
+      if (!mounted) return;
+      setState(() {
+        _messages.add((role: 'assistant', text: result.data['reply'] as String));
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('[chatWithCoach] $e');
+      if (!mounted) return;
+      setState(() {
+        _messages.add((role: 'assistant', text: "Sorry, I couldn't connect right now. Check your internet and try again!"));
+        _loading = false;
+      });
+    }
     _scrollToBottom();
   }
 

@@ -59,7 +59,7 @@ exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) =
 });
 
 // --- AI Chat Coach ---
-exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMINI_API_KEY"] }, async (request) => {
+exports.chatWithCoach = onCall({ cors: true, invoker: "public" }, async (request) => {
   const message = (request.data.message || '').trim();
   const history = request.data.history || [];
   const uid = request.auth ? request.auth.uid : "test_user_123";
@@ -93,24 +93,31 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   ].filter(Boolean).join(' ');
 
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     systemInstruction,
-    tools: [{ googleSearch: {} }],
   });
 
-  // Gemini uses 'model' where our app uses 'assistant'
-  const geminiHistory = history.map(m => ({
+  // Gemini uses 'model' where our app uses 'assistant'.
+  // Also drop any leading model turns — Gemini requires history to start with a user turn.
+  const allHistory = history.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.text }],
   }));
+  const firstUserIdx = allHistory.findIndex(m => m.role === 'user');
+  const geminiHistory = firstUserIdx === -1 ? [] : allHistory.slice(firstUserIdx);
 
-  const chat = model.startChat({ history: geminiHistory });
-  const result = await chat.sendMessage(message);
-  return { reply: result.response.text() };
+  try {
+    const chat = model.startChat({ history: geminiHistory });
+    const result = await chat.sendMessage(message);
+    return { reply: result.response.text() };
+  } catch (e) {
+    console.error('[chatWithCoach] Gemini error:', e);
+    throw e;
+  }
 });
 
 // --- 巧君負責的功能 2: 更新 Feed (無限延伸 + 隨機版) ---
-exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120, secrets: ["GEMINI_API_KEY"] }, async (request) => {
+exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120 }, async (request) => {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const uid = request.auth ? request.auth.uid : "test_user_123";
     const db = admin.firestore();
