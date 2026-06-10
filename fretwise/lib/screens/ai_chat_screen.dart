@@ -6,12 +6,16 @@ class AIChatScreen extends StatefulWidget {
   final AppTheme t;
   final String fromScreen;
   final VoidCallback onClose;
+  final String? activeSongTitle;
+  final String? activeSongArtist;
 
   const AIChatScreen({
     super.key,
     required this.t,
     required this.fromScreen,
     required this.onClose,
+    this.activeSongTitle,
+    this.activeSongArtist,
   });
 
   @override
@@ -63,7 +67,13 @@ class _AIChatScreenState extends State<AIChatScreen> {
 
       final result = await FirebaseFunctions.instance
           .httpsCallable('chatWithCoach')
-          .call({'message': msg, 'history': history});
+          .call({
+            'message': msg,
+            'history': history,
+            'fromScreen': widget.fromScreen,
+            if (widget.activeSongTitle != null) 'activeSongTitle': widget.activeSongTitle,
+            if (widget.activeSongArtist != null) 'activeSongArtist': widget.activeSongArtist,
+          });
 
       if (!mounted) return;
       setState(() {

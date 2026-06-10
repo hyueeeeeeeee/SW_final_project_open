@@ -4,6 +4,12 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 admin.initializeApp();
 
+// Mirrors lib/utils/song_id.dart — must stay in sync
+function makeSongId(title, artist) {
+  const base = `${title.trim()}--${artist.trim()}`.toLowerCase();
+  return base.replace(/[^a-z0-9_\-]/g, '_');
+}
+
 // 🛠️ 真實 YouTube 爬蟲
 async function getRealYouTubeVideo(songTitle, artist) {
   try {
@@ -62,6 +68,9 @@ exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) =
 exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMINI_API_KEY"] }, async (request) => {
   const message = (request.data.message || '').trim();
   const history = request.data.history || [];
+  const fromScreen = request.data.fromScreen || 'home';
+  const activeSongTitle = request.data.activeSongTitle || null;
+  const activeSongArtist = request.data.activeSongArtist || null;
   const uid = request.auth ? request.auth.uid : "test_user_123";
 
   if (!message) throw new Error("Message cannot be empty");
@@ -70,7 +79,7 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
   // Pull the user's active song library so the coach knows what they're working on
-  let songContext = '';
+  let libraryContext = '';
   try {
     const snap = await db.collection('users').doc(uid).collection('songLibrary')
       .where('isArchived', '==', false).get();
@@ -79,17 +88,48 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
       return `${s.title} by ${s.artist}`;
     });
     if (songs.length > 0) {
-      songContext = `The user is currently learning: ${songs.join(', ')}.`;
+      libraryContext = `The user is currently practicing these songs: ${songs.join(', ')}.`;
     }
   } catch (e) {
     console.error('Library fetch failed, continuing without it:', e);
   }
 
+  // Build context about the specific song and screen the user opened chat from,
+  // enriched with the user's SongProfile (strengths, weaknesses, focus areas) if available
+  let activeSongContext = '';
+  if (activeSongTitle) {
+    const artistPart = activeSongArtist ? ` by ${activeSongArtist}` : '';
+
+    const profileLines = [];
+    try {
+      const songId = makeSongId(activeSongTitle, activeSongArtist || '');
+      const profileSnap = await db.collection('users').doc(uid)
+        .collection('songProfiles').doc(songId).get();
+      if (profileSnap.exists) {
+        const sp = profileSnap.data();
+        if (sp.problemAreas?.length)    profileLines.push(`Problem areas: ${sp.problemAreas.join(', ')}.`);
+        if (sp.strengthAreas?.length)   profileLines.push(`Strengths: ${sp.strengthAreas.join(', ')}.`);
+        if (sp.recommendedFocus?.length) profileLines.push(`Recommended focus: ${sp.recommendedFocus.join(', ')}.`);
+        if (sp.latestAiSummary)         profileLines.push(sp.latestAiSummary);
+      }
+    } catch (e) {
+      console.error('SongProfile fetch failed, continuing without it:', e);
+    }
+
+    const profileContext = profileLines.length ? ' ' + profileLines.join(' ') : '';
+
+    if (fromScreen === 'practicing') {
+      activeSongContext = `The user is currently in a practice session for "${activeSongTitle}"${artistPart}.${profileContext} Focus your advice on this song and their current problem areas.`;
+    } else if (fromScreen === 'sessionComplete') {
+      activeSongContext = `The user just finished a practice session for "${activeSongTitle}"${artistPart}.${profileContext} They may want reflection or advice on what to work on next.`;
+    }
+  }
+
   const systemInstruction = [
     'You are an expert AI guitar coach inside the FretWise app.',
     'Give practical, encouraging advice. Keep responses concise (2–4 sentences).',
-    'When you cite a resource or tutorial, include a real URL so the user can open it.',
-    songContext,
+    libraryContext,
+    activeSongContext,
   ].filter(Boolean).join(' ');
 
   const model = genAI.getGenerativeModel({

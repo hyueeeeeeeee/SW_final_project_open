@@ -86,6 +86,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
   Map<String, dynamic>? _screenProps;
   bool _showAI = false;
   String _prevScreen = 'home';
+  String? _aiSongTitle;
+  String? _aiSongArtist;
   Offset _fabPos = const Offset(20, 84);
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
@@ -106,11 +108,22 @@ class _FretwiseShellState extends State<FretwiseShell> {
     });
   }
 
-  void _openAI() => setState(() {
-    _prevScreen = _screen;
-    _showAI = true;
+  void _openAI() {
+    final props = _screenProps ?? {};
+    final hasSong = _screen == 'practicing' || _screen == 'sessionComplete';
+    setState(() {
+      _prevScreen = _screen;
+      _aiSongTitle = hasSong ? props['title'] as String? : null;
+      _aiSongArtist = hasSong ? props['artist'] as String? : null;
+      _showAI = true;
+    });
+  }
+
+  void _closeAI() => setState(() {
+    _showAI = false;
+    _aiSongTitle = null;
+    _aiSongArtist = null;
   });
-  void _closeAI() => setState(() => _showAI = false);
 
   bool get _isOverlay => _overlayScreens.contains(_screen);
   bool get _showNav => !_showAI && !_isOverlay;
@@ -144,6 +157,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
                           t: t,
                           fromScreen: _prevScreen,
                           onClose: _closeAI,
+                          activeSongTitle: _aiSongTitle,
+                          activeSongArtist: _aiSongArtist,
                         )
                       : _buildScreen(t, state),
                 ),
