@@ -385,7 +385,9 @@ class _PracticingScreenState extends State<PracticingScreen> {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: _buildMaterialContent(practiceMaterial, aiService.isGenerating),
+                        child: _showStrumModal
+                            ? const SizedBox.expand()
+                            : _buildMaterialContent(practiceMaterial, aiService.isGenerating),
                       ),
                     ),
                   ),

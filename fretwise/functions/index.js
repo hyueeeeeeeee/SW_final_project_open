@@ -139,20 +139,28 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
 
   // Gemini uses 'model' where our app uses 'assistant'.
   // Also drop any leading model turns — Gemini requires history to start with a user turn.
-  const allHistory = history.map(m => ({
+  // Cap to last 6 messages (3 turns) to keep token count stable.
+  const allHistory = history.slice(-6).map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: m.text }],
   }));
   const firstUserIdx = allHistory.findIndex(m => m.role === 'user');
   const geminiHistory = firstUserIdx === -1 ? [] : allHistory.slice(firstUserIdx);
 
-  try {
-    const chat = model.startChat({ history: geminiHistory });
-    const result = await chat.sendMessage(message);
-    return { reply: result.response.text() };
-  } catch (e) {
-    console.error('[chatWithCoach] Gemini error:', e);
-    throw e;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const chat = model.startChat({ history: geminiHistory });
+      const result = await chat.sendMessage(message);
+      return { reply: result.response.text() };
+    } catch (e) {
+      const is503 = e?.status === 503 || e?.message?.includes('503') || e?.message?.includes('overloaded');
+      if (is503 && attempt < 2) {
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      console.error('[chatWithCoach] Gemini error:', e);
+      throw e;
+    }
   }
 });
 

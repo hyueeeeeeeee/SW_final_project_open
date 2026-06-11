@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import '../theme.dart';
 
@@ -25,6 +26,7 @@ class AIChatScreen extends StatefulWidget {
 class _AIChatScreenState extends State<AIChatScreen> {
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  late final FocusNode _inputFocus;
   bool _loading = false;
 
   AppTheme get t => widget.t;
@@ -104,9 +106,26 @@ class _AIChatScreenState extends State<AIChatScreen> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    _inputFocus = FocusNode(
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.enter &&
+            !HardwareKeyboard.instance.isShiftPressed) {
+          _send();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+    );
+  }
+
+  @override
   void dispose() {
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
+    _inputFocus.dispose();
     super.dispose();
   }
 
@@ -278,8 +297,10 @@ class _AIChatScreenState extends State<AIChatScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
                         child: TextField(
                           controller: _inputCtrl,
+                          focusNode: _inputFocus,
                           style: TextStyle(fontSize: 14, color: t.text),
                           onSubmitted: (_) => _send(),
+                          textInputAction: TextInputAction.send,
                           maxLines: null,
                           decoration: InputDecoration(
                             hintText: 'Ask your guitar coach…',
