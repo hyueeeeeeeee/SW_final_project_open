@@ -10,12 +10,14 @@ class ChatSession {
   final List<ChatMessage> messages;
   final DateTime updatedAt;
   final String? practicingChatKey;
+  final String? firestoreId;
 
   const ChatSession({
     required this.title,
     required this.messages,
     required this.updatedAt,
     this.practicingChatKey,
+    this.firestoreId,
   });
 }
 

@@ -545,7 +545,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton(
-                              onPressed: () => setState(() => _showStrumModal = false),
+                              onPressed: _dismissStrumModal,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: t.accent,
                                 padding: const EdgeInsets.symmetric(vertical: 14),

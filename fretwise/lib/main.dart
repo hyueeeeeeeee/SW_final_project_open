@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 
 // 👇 新增這兩行 Firebase 必備的 import
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 
 import 'theme.dart';
@@ -93,6 +95,86 @@ class _FretwiseShellState extends State<FretwiseShell> {
   final List<ChatSession> _aiHistory = [];
   final Map<String, List<ChatMessage>> _practicingChats = {};
   String? _activePracticingChatKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChatHistory();
+  }
+
+  String get _uid => FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
+
+  Future<void> _loadChatHistory() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_uid)
+          .collection('chatSessions')
+          .orderBy('updatedAt', descending: true)
+          .limit(50)
+          .get();
+
+      final loaded = snap.docs.map((doc) {
+        final d = doc.data();
+        final messages = (d['messages'] as List? ?? [])
+            .map((m) => (role: m['role'] as String, text: m['text'] as String))
+            .toList();
+        return ChatSession(
+          title: d['title'] as String? ?? 'Chat',
+          messages: messages,
+          updatedAt: (d['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+          practicingChatKey: d['practicingChatKey'] as String?,
+          firestoreId: doc.id,
+        );
+      }).toList();
+
+      if (mounted && loaded.isNotEmpty) {
+        setState(() => _aiHistory.addAll(loaded));
+      }
+    } catch (e) {
+      debugPrint('[ChatHistory] load failed: $e');
+    }
+  }
+
+  void _saveChatSession(ChatSession session) {
+    final col = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_uid)
+        .collection('chatSessions');
+
+    final data = {
+      'title': session.title,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'practicingChatKey': session.practicingChatKey,
+      'messages': session.messages
+          .map((m) => {'role': m.role, 'text': m.text})
+          .toList(),
+    };
+
+    if (session.firestoreId != null) {
+      col.doc(session.firestoreId).set(data);
+    } else {
+      col.add(data).then((ref) {
+        // Backfill the firestoreId so future updates reuse the same doc
+        final idx = _aiHistory.indexWhere(
+          (s) => s.firestoreId == null && s.updatedAt == session.updatedAt,
+        );
+        if (idx != -1) {
+          final old = _aiHistory[idx];
+          _aiHistory[idx] = ChatSession(
+            title: old.title,
+            messages: old.messages,
+            updatedAt: old.updatedAt,
+            practicingChatKey: old.practicingChatKey,
+            firestoreId: ref.id,
+          );
+        }
+      }).catchError((Object e) {
+        debugPrint('[ChatHistory] save failed: $e');
+        return null;
+      });
+    }
+  }
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
     final isScreenTransition = dest != _screen;
@@ -192,24 +274,26 @@ class _FretwiseShellState extends State<FretwiseShell> {
         ? _activePracticingChatKey
         : null;
 
+    String? existingDocId;
     _aiHistory.removeWhere((session) {
       if (session.practicingChatKey != practicingChatKey) return false;
       if (session.messages.length != _aiMessages.length) return false;
       for (var i = 0; i < session.messages.length; i++) {
         if (session.messages[i] != _aiMessages[i]) return false;
       }
+      existingDocId = session.firestoreId;
       return true;
     });
 
-    _aiHistory.insert(
-      0,
-      ChatSession(
-        title: _chatTitle(_aiMessages),
-        messages: List.of(_aiMessages),
-        updatedAt: DateTime.now(),
-        practicingChatKey: practicingChatKey,
-      ),
+    final session = ChatSession(
+      title: _chatTitle(_aiMessages),
+      messages: List.of(_aiMessages),
+      updatedAt: DateTime.now(),
+      practicingChatKey: practicingChatKey,
+      firestoreId: existingDocId,
     );
+    _aiHistory.insert(0, session);
+    _saveChatSession(session);
   }
 
   List<ChatSession> get _visibleAIHistory {
