@@ -220,6 +220,28 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   const db = admin.firestore();
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+  // Pull user profile and preferences for personalized coaching
+  let userProfileContext = '';
+  try {
+    const userSnap = await db.collection('users').doc(uid).get();
+    if (userSnap.exists) {
+      const u = userSnap.data();
+      const profile = u.profile || {};
+      const prefs = u.preferences || {};
+      const parts = [];
+      if (profile.skillLevel)          parts.push(`Skill level: ${profile.skillLevel}.`);
+      if (profile.experienceSummary)   parts.push(profile.experienceSummary);
+      if (profile.currentGoals?.length)    parts.push(`Current goals: ${profile.currentGoals.join(', ')}.`);
+      if (profile.weakTechniques?.length)  parts.push(`Weak areas: ${profile.weakTechniques.join(', ')}.`);
+      if (profile.strongTechniques?.length) parts.push(`Strengths: ${profile.strongTechniques.join(', ')}.`);
+      if (prefs.favoriteGenres?.length)    parts.push(`Favourite genres: ${prefs.favoriteGenres.join(', ')}.`);
+      if (prefs.favoriteArtists?.length)   parts.push(`Favourite artists: ${prefs.favoriteArtists.join(', ')}.`);
+      if (parts.length > 0) userProfileContext = `About this user — ${parts.join(' ')}`;
+    }
+  } catch (e) {
+    console.error('User profile fetch failed, continuing without it:', e);
+  }
+
   // Pull the user's active song library so the coach knows what they're working on
   let libraryContext = '';
   try {
@@ -275,6 +297,7 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
     'When the user wants to add a song to their library, save a song to practice, or is thinking about learning a specific song, call the searchSong tool.',
     'When the user says they like or dislike an artist, band, genre, style, or type of music, call the updateFeed tool.',
     'Never claim that material was generated, the plan was changed, a song was added, or the feed was updated unless you actually called the relevant tool in this turn.',
+    userProfileContext,
     libraryContext,
     activeSongContext,
   ].filter(Boolean).join(' ');
