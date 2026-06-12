@@ -22,7 +22,7 @@ import 'screens/ai_chat_screen.dart';
 void main() async {
   // 1. 確保 Flutter 引擎已經啟動
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // 2. 初始化 Firebase (連接到同學建好的專案)
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
@@ -89,6 +89,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
   String? _aiSongTitle;
   String? _aiSongArtist;
   Offset _fabPos = const Offset(20, 84);
+  List<ChatMessage> _aiMessages = List.of(AIChatScreen.initialMessages);
+  final List<ChatSession> _aiHistory = [];
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
     if (dest == 'sessionComplete' && props != null) {
@@ -125,6 +127,61 @@ class _FretwiseShellState extends State<FretwiseShell> {
     _aiSongArtist = null;
   });
 
+  bool get _hasActiveChat =>
+      _aiMessages.length > AIChatScreen.initialMessages.length;
+
+  String _chatTitle(List<ChatMessage> messages) {
+    String? firstUserMessage;
+    for (final message in messages) {
+      if (message.role != 'user') continue;
+      final text = message.text.trim();
+      if (text.isEmpty) continue;
+      firstUserMessage = text;
+      break;
+    }
+
+    if (firstUserMessage == null) return 'New chat';
+    return firstUserMessage.length > 36
+        ? '${firstUserMessage.substring(0, 36)}...'
+        : firstUserMessage;
+  }
+
+  void _archiveActiveChat() {
+    if (!_hasActiveChat) return;
+
+    _aiHistory.removeWhere((session) {
+      if (session.messages.length != _aiMessages.length) return false;
+      for (var i = 0; i < session.messages.length; i++) {
+        if (session.messages[i] != _aiMessages[i]) return false;
+      }
+      return true;
+    });
+
+    _aiHistory.insert(
+      0,
+      ChatSession(
+        title: _chatTitle(_aiMessages),
+        messages: List.of(_aiMessages),
+        updatedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  void _startNewAIChat() {
+    setState(() {
+      _archiveActiveChat();
+      _aiMessages = List.of(AIChatScreen.initialMessages);
+    });
+  }
+
+  void _openAIHistory(ChatSession session) {
+    setState(() {
+      _archiveActiveChat();
+      _aiHistory.remove(session);
+      _aiMessages = List.of(session.messages);
+    });
+  }
+
   bool get _isOverlay => _overlayScreens.contains(_screen);
   bool get _showNav => !_showAI && !_isOverlay;
   bool get _showFloatingAI => !_showAI && !_isOverlay;
@@ -157,6 +214,10 @@ class _FretwiseShellState extends State<FretwiseShell> {
                           t: t,
                           fromScreen: _prevScreen,
                           onClose: _closeAI,
+                          messages: _aiMessages,
+                          history: List.unmodifiable(_aiHistory),
+                          onNewChat: _startNewAIChat,
+                          onOpenHistory: _openAIHistory,
                           activeSongTitle: _aiSongTitle,
                           activeSongArtist: _aiSongArtist,
                         )

@@ -1,6 +1,6 @@
 const { onCall } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenerativeAI, SchemaType } = require("@google/generative-ai");
 
 admin.initializeApp();
 
@@ -64,6 +64,80 @@ exports.searchSong = onCall({ cors: true, invoker: "public" }, async (request) =
   }
 });
 
+// --- Dummy skills (real versions are being implemented by teammates, see docs/ai/overview.md) ---
+// These are also exported as onCall so Flutter can call them directly once real implementations land.
+function generateMaterialSkill(args, uid) {
+  console.log(`[DUMMY SKILL] generateMaterial called! uid=${uid} args=${JSON.stringify(args)}`);
+  return {
+    status: "ok",
+    note: "generateMaterial is not implemented yet (dummy was called). Tell the user their new practice material is being prepared.",
+  };
+}
+
+function updatePlanSkill(args, uid) {
+  console.log(`[DUMMY SKILL] updatePlan called! uid=${uid} args=${JSON.stringify(args)}`);
+  return {
+    status: "ok",
+    note: "updatePlan is not implemented yet (dummy was called). Tell the user their practice plan is being updated.",
+  };
+}
+
+exports.generateMaterial = onCall({ cors: true, invoker: "public" }, async (request) => {
+  const uid = request.auth ? request.auth.uid : "test_user_123";
+  return generateMaterialSkill(request.data, uid);
+});
+
+exports.updatePlan = onCall({ cors: true, invoker: "public" }, async (request) => {
+  const uid = request.auth ? request.auth.uid : "test_user_123";
+  return updatePlanSkill(request.data, uid);
+});
+
+const coachSkills = {
+  generateMaterial: generateMaterialSkill,
+  updatePlan: updatePlanSkill,
+};
+
+const coachToolDeclarations = [
+  {
+    name: "generateMaterial",
+    description:
+      "Generate or refresh practice material for a song — including videos, tutorials, and exercises. Call this when the user asks for a new, different, easier, or harder video, tutorial, exercise, or practice material, or says they want to change what they are practicing.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        songTitle: {
+          type: SchemaType.STRING,
+          description: "Title of the song the material is for. Use the active song if the user doesn't name one.",
+        },
+        songArtist: {
+          type: SchemaType.STRING,
+          description: "Artist of the song, if known.",
+        },
+        requestContext: {
+          type: SchemaType.STRING,
+          description: "What the user asked for, e.g. 'wants an easier strumming exercise'.",
+        },
+      },
+      required: ["requestContext"],
+    },
+  },
+  {
+    name: "updatePlan",
+    description:
+      "Create or update the user's practice schedule. Call this when the user wants to change their time plan, practice schedule, practice days, or deadlines — including canceling, skipping, or rescheduling a specific session, or saying they are too busy or unavailable at a certain time.",
+    parameters: {
+      type: SchemaType.OBJECT,
+      properties: {
+        requestContext: {
+          type: SchemaType.STRING,
+          description: "What schedule change the user asked for, e.g. 'move practice to weekends only'.",
+        },
+      },
+      required: ["requestContext"],
+    },
+  },
+];
+
 // --- AI Chat Coach ---
 exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMINI_API_KEY"] }, async (request) => {
   const message = (request.data.message || '').trim();
@@ -74,6 +148,8 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   const uid = request.auth ? request.auth.uid : "test_user_123";
 
   if (!message) throw new Error("Message cannot be empty");
+
+  console.log(`[chatWithCoach] fromScreen=${fromScreen} activeSongTitle=${activeSongTitle} activeSongArtist=${activeSongArtist} message="${message}"`);
 
   const db = admin.firestore();
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -128,6 +204,9 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   const systemInstruction = [
     'You are an expert AI guitar coach inside the FretWise app.',
     'Give practical, encouraging advice. Keep responses concise (2–4 sentences).',
+    'When the user asks for a new or different video, tutorial, exercise, or any practice material — including easier or harder versions — call the generateMaterial tool.',
+    'When the user wants to change, cancel, skip, or reschedule a practice session, or says they are too busy or unavailable at a certain time, call the updatePlan tool.',
+    'Never claim that material was generated or the plan was changed unless you actually called the tool in this turn.',
     libraryContext,
     activeSongContext,
   ].filter(Boolean).join(' ');
@@ -135,6 +214,7 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   const model = genAI.getGenerativeModel({
     model: 'gemini-2.5-flash',
     systemInstruction,
+    tools: [{ functionDeclarations: coachToolDeclarations }],
   });
 
   // Gemini uses 'model' where our app uses 'assistant'.
@@ -150,8 +230,29 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const chat = model.startChat({ history: geminiHistory });
-      const result = await chat.sendMessage(message);
-      return { reply: result.response.text() };
+      let result = await chat.sendMessage(message);
+      const skillsCalled = [];
+
+      // If the model asked to use a skill, run it and feed the result back
+      // so it can produce a final text reply. Cap rounds to avoid loops.
+      for (let round = 0; round < 3; round++) {
+        const calls = result.response.functionCalls();
+        console.log(`[chatWithCoach] round=${round} functionCalls=${JSON.stringify(calls)}`);
+        if (!calls || calls.length === 0) break;
+
+        const responses = calls.map((call) => {
+          const skill = coachSkills[call.name];
+          skillsCalled.push(call.name);
+          const response = skill
+            ? skill(call.args, uid)
+            : { status: "error", note: `Unknown skill: ${call.name}` };
+          return { functionResponse: { name: call.name, response } };
+        });
+
+        result = await chat.sendMessage(responses);
+      }
+
+      return { reply: result.response.text(), skillsCalled };
     } catch (e) {
       const is503 = e?.status === 503 || e?.message?.includes('503') || e?.message?.includes('overloaded');
       if (is503 && attempt < 2) {
