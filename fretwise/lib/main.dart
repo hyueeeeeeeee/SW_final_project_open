@@ -266,6 +266,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
           title: props['title'] as String? ?? 'Wonderwall',
           artist: props['artist'] as String? ?? 'Oasis',
           bpm: props['bpm'] as int? ?? 87,
+          songId: props['songId'] as String? ?? '',
           onOpenAI: _openAI,
           practiceMaterial: aiService.currentMaterial,
         );

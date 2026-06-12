@@ -18,6 +18,7 @@ class PracticingScreen extends StatefulWidget {
   final int bpm;
   final VoidCallback onOpenAI;
 
+  final String songId;
   final Map<String, dynamic>? practiceMaterial;
 
   const PracticingScreen({
@@ -27,6 +28,7 @@ class PracticingScreen extends StatefulWidget {
     required this.title,
     required this.artist,
     required this.bpm,
+    required this.songId,
     required this.onOpenAI,
     this.practiceMaterial,
   });
@@ -79,12 +81,20 @@ class _PracticingScreenState extends State<PracticingScreen> {
     });
     _metroAudio = _MetronomeAudio();
     _metroAudio!.init();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final svc = Provider.of<AiMaterialService>(context, listen: false);
+      svc.reset();
+      svc.generateMaterial(
+        songId: widget.songId,
+        song: widget.title,
+        artist: widget.artist,
+      );
+    });
   }
 
   void _triggerBackgroundAiWorkflow() {
-    debugPrint('觸發 AI flow：完成 Session，開始在背景生成新教材...');
-
     Provider.of<AiMaterialService>(context, listen: false).generateMaterial(
+      songId: widget.songId,
       song: widget.title,
       artist: widget.artist,
     );
@@ -978,14 +988,14 @@ class _MetronomeAudio {
       await _accentPlayer!.setAudioContext(AudioContext(
         android: AudioContextAndroid(
           contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
+          usageType: AndroidUsageType.media,
           audioFocus: AndroidAudioFocus.none,
         ),
       ));
       await _tickPlayer!.setAudioContext(AudioContext(
         android: AudioContextAndroid(
           contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
+          usageType: AndroidUsageType.media,
           audioFocus: AndroidAudioFocus.none,
         ),
       ));
