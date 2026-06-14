@@ -19,11 +19,16 @@ dependencies:
   firebase_auth: ^6.5.1
   cloud_firestore: ^6.4.1
   cloud_functions: ^6.3.1
+<<<<<<< HEAD
   firebase_storage: ^13.4.2
   path_provider: ^2.0.15
   record: ^5.0.0
   device_calendar: ^3.9.0
   timezone: ^0.11.0
+=======
+  device_calendar: ^4.3.3
+  timezone: ^0.9.4
+>>>>>>> 6761ca8d8636d10c4dc4143c9ed4e756044245db
   youtube_player_flutter: ^10.0.1
   youtube_player_iframe: ^6.0.2
 

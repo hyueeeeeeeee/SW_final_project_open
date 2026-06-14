@@ -355,7 +355,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                   'title': s.title,
                                   'artist': s.artist,
                                   'bpm': s.bpm,
+<<<<<<< HEAD
                                   'videoUrl': s.videoUrl,
+=======
+                                  'songId': s.id,
+>>>>>>> 6761ca8d8636d10c4dc4143c9ed4e756044245db
                                 }),
                                 onFavToggle: () => appState.updateSongStatus(s.id, {'isFavorite': !s.isFavorite}),
                                 onArchive: !_filterArchived ? () => appState.updateSongStatus(s.id, {'isArchived': true}) : null,

@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 
 // 👇 新增這兩行 Firebase 必備的 import
 import 'package:firebase_core/firebase_core.dart';
-import 'firebase_options.dart'; 
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart';
 
 import 'theme.dart';
 import 'models/app_state.dart';
@@ -22,7 +24,7 @@ import 'screens/ai_chat_screen.dart';
 void main() async {
   // 1. 確保 Flutter 引擎已經啟動
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // 2. 初始化 Firebase (連接到同學建好的專案)
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
@@ -86,9 +88,101 @@ class _FretwiseShellState extends State<FretwiseShell> {
   Map<String, dynamic>? _screenProps;
   bool _showAI = false;
   String _prevScreen = 'home';
+  String? _aiSongTitle;
+  String? _aiSongArtist;
   Offset _fabPos = const Offset(20, 84);
+  List<ChatMessage> _aiMessages = List.of(AIChatScreen.initialMessages);
+  final List<ChatSession> _aiHistory = [];
+  final Map<String, List<ChatMessage>> _practicingChats = {};
+  String? _activePracticingChatKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChatHistory();
+  }
+
+  String get _uid => FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
+
+  Future<void> _loadChatHistory() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_uid)
+          .collection('chatSessions')
+          .orderBy('updatedAt', descending: true)
+          .limit(50)
+          .get();
+
+      final loaded = snap.docs.map((doc) {
+        final d = doc.data();
+        final messages = (d['messages'] as List? ?? [])
+            .map((m) => (role: m['role'] as String, text: m['text'] as String))
+            .toList();
+        return ChatSession(
+          title: d['title'] as String? ?? 'Chat',
+          messages: messages,
+          updatedAt: (d['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+          practicingChatKey: d['practicingChatKey'] as String?,
+          firestoreId: doc.id,
+        );
+      }).toList();
+
+      if (mounted && loaded.isNotEmpty) {
+        setState(() => _aiHistory.addAll(loaded));
+      }
+    } catch (e) {
+      debugPrint('[ChatHistory] load failed: $e');
+    }
+  }
+
+  void _saveChatSession(ChatSession session) {
+    final col = FirebaseFirestore.instance
+        .collection('users')
+        .doc(_uid)
+        .collection('chatSessions');
+
+    final data = {
+      'title': session.title,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'practicingChatKey': session.practicingChatKey,
+      'messages': session.messages
+          .map((m) => {'role': m.role, 'text': m.text})
+          .toList(),
+    };
+
+    if (session.firestoreId != null) {
+      col.doc(session.firestoreId).set(data);
+    } else {
+      col.add(data).then((ref) {
+        // Backfill the firestoreId so future updates reuse the same doc
+        final idx = _aiHistory.indexWhere(
+          (s) => s.firestoreId == null && s.updatedAt == session.updatedAt,
+        );
+        if (idx != -1) {
+          final old = _aiHistory[idx];
+          _aiHistory[idx] = ChatSession(
+            title: old.title,
+            messages: old.messages,
+            updatedAt: old.updatedAt,
+            practicingChatKey: old.practicingChatKey,
+            firestoreId: ref.id,
+          );
+        }
+      }).catchError((Object e) {
+        debugPrint('[ChatHistory] save failed: $e');
+        return null;
+      });
+    }
+  }
 
   void _navigate(String dest, {Map<String, dynamic>? props}) {
+    final isScreenTransition = dest != _screen;
+    if (isScreenTransition) {
+      _saveActivePracticingChat();
+      _archiveActiveChat();
+    }
+
     if (dest == 'sessionComplete' && props != null) {
       context.read<AppState>().addDiaryEntry(
         DiaryEntry(
@@ -103,14 +197,135 @@ class _FretwiseShellState extends State<FretwiseShell> {
       _screenProps = props;
       _screen = dest;
       _showAI = false;
+      _activePracticingChatKey = null;
+      if (isScreenTransition && dest != 'practicing') {
+        _aiMessages = List.of(AIChatScreen.initialMessages);
+      }
     });
   }
 
-  void _openAI() => setState(() {
-    _prevScreen = _screen;
-    _showAI = true;
-  });
-  void _closeAI() => setState(() => _showAI = false);
+  void _openAI() {
+    final props = _screenProps ?? {};
+    final hasSong = _screen == 'practicing' || _screen == 'sessionComplete';
+    final practicingChatKey = _screen == 'practicing'
+        ? _practicingChatKey(props)
+        : null;
+    setState(() {
+      _prevScreen = _screen;
+      _aiSongTitle = hasSong ? props['title'] as String? : null;
+      _aiSongArtist = hasSong ? props['artist'] as String? : null;
+      _activePracticingChatKey = practicingChatKey;
+      if (practicingChatKey != null) {
+        _aiMessages = List.of(
+          _practicingChats[practicingChatKey] ?? AIChatScreen.initialMessages,
+        );
+      }
+      _showAI = true;
+    });
+  }
+
+  void _closeAI() {
+    _saveActivePracticingChat();
+    setState(() {
+      _showAI = false;
+      _aiSongTitle = null;
+      _aiSongArtist = null;
+    });
+  }
+
+  bool get _hasActiveChat =>
+      _aiMessages.length > AIChatScreen.initialMessages.length;
+
+  String _practicingChatKey(Map<String, dynamic> props) {
+    final songId = (props['songId'] as String?)?.trim();
+    if (songId != null && songId.isNotEmpty) return 'song:$songId';
+
+    final title = (props['title'] as String?)?.trim() ?? 'untitled';
+    final artist = (props['artist'] as String?)?.trim() ?? 'unknown';
+    return 'practice:$title|$artist';
+  }
+
+  void _saveActivePracticingChat() {
+    final key = _activePracticingChatKey;
+    if (_prevScreen != 'practicing' || key == null) return;
+
+    _practicingChats[key] = List.of(_aiMessages);
+  }
+
+  String _chatTitle(List<ChatMessage> messages) {
+    String? firstUserMessage;
+    for (final message in messages) {
+      if (message.role != 'user') continue;
+      final text = message.text.trim();
+      if (text.isEmpty) continue;
+      firstUserMessage = text;
+      break;
+    }
+
+    if (firstUserMessage == null) return 'New chat';
+    return firstUserMessage.length > 36
+        ? '${firstUserMessage.substring(0, 36)}...'
+        : firstUserMessage;
+  }
+
+  void _archiveActiveChat() {
+    if (!_hasActiveChat) return;
+    final practicingChatKey = _prevScreen == 'practicing'
+        ? _activePracticingChatKey
+        : null;
+
+    String? existingDocId;
+    _aiHistory.removeWhere((session) {
+      if (session.practicingChatKey != practicingChatKey) return false;
+      if (session.messages.length != _aiMessages.length) return false;
+      for (var i = 0; i < session.messages.length; i++) {
+        if (session.messages[i] != _aiMessages[i]) return false;
+      }
+      existingDocId = session.firestoreId;
+      return true;
+    });
+
+    final session = ChatSession(
+      title: _chatTitle(_aiMessages),
+      messages: List.of(_aiMessages),
+      updatedAt: DateTime.now(),
+      practicingChatKey: practicingChatKey,
+      firestoreId: existingDocId,
+    );
+    _aiHistory.insert(0, session);
+    _saveChatSession(session);
+  }
+
+  List<ChatSession> get _visibleAIHistory {
+    final key = _activePracticingChatKey;
+    return _aiHistory.where((session) {
+      if (session.practicingChatKey == null) return true;
+      return key != null && session.practicingChatKey == key;
+    }).toList();
+  }
+
+  void _startNewAIChat() {
+    setState(() {
+      _archiveActiveChat();
+      _aiMessages = List.of(AIChatScreen.initialMessages);
+      final key = _activePracticingChatKey;
+      if (_prevScreen == 'practicing' && key != null) {
+        _practicingChats[key] = List.of(_aiMessages);
+      }
+    });
+  }
+
+  void _openAIHistory(ChatSession session) {
+    setState(() {
+      _archiveActiveChat();
+      _aiHistory.remove(session);
+      _aiMessages = List.of(session.messages);
+      final key = _activePracticingChatKey;
+      if (_prevScreen == 'practicing' && key != null) {
+        _practicingChats[key] = List.of(_aiMessages);
+      }
+    });
+  }
 
   bool get _isOverlay => _overlayScreens.contains(_screen);
   bool get _showNav => !_showAI && !_isOverlay;
@@ -144,6 +359,12 @@ class _FretwiseShellState extends State<FretwiseShell> {
                           t: t,
                           fromScreen: _prevScreen,
                           onClose: _closeAI,
+                          messages: _aiMessages,
+                          history: List.unmodifiable(_visibleAIHistory),
+                          onNewChat: _startNewAIChat,
+                          onOpenHistory: _openAIHistory,
+                          activeSongTitle: _aiSongTitle,
+                          activeSongArtist: _aiSongArtist,
                         )
                       : _buildScreen(t, state),
                 ),
@@ -251,7 +472,11 @@ class _FretwiseShellState extends State<FretwiseShell> {
           title: props['title'] as String? ?? 'Wonderwall',
           artist: props['artist'] as String? ?? 'Oasis',
           bpm: props['bpm'] as int? ?? 87,
+<<<<<<< HEAD
           videoUrl: props['videoUrl'] as String?,
+=======
+          songId: props['songId'] as String? ?? '',
+>>>>>>> 6761ca8d8636d10c4dc4143c9ed4e756044245db
           onOpenAI: _openAI,
           practiceMaterial: aiService.currentMaterial,
         );

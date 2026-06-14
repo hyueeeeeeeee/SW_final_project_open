@@ -26,6 +26,7 @@ class PracticingScreen extends StatefulWidget {
   final VoidCallback onOpenAI;
   final String? videoUrl;
 
+  final String songId;
   final Map<String, dynamic>? practiceMaterial;
 
   const PracticingScreen({
@@ -35,6 +36,7 @@ class PracticingScreen extends StatefulWidget {
     required this.title,
     required this.artist,
     required this.bpm,
+    required this.songId,
     required this.onOpenAI,
     this.videoUrl,
     this.practiceMaterial,
@@ -93,12 +95,20 @@ class _PracticingScreenState extends State<PracticingScreen> {
     });
     _metroAudio = _MetronomeAudio();
     _metroAudio!.init();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final svc = Provider.of<AiMaterialService>(context, listen: false);
+      svc.reset();
+      svc.generateMaterial(
+        songId: widget.songId,
+        song: widget.title,
+        artist: widget.artist,
+      );
+    });
   }
 
   void _triggerBackgroundAiWorkflow() {
-    debugPrint('觸發 AI flow：完成 Session，開始在背景生成新教材...');
-
     Provider.of<AiMaterialService>(context, listen: false).generateMaterial(
+      songId: widget.songId,
       song: widget.title,
       artist: widget.artist,
     );
@@ -496,7 +506,9 @@ class _PracticingScreenState extends State<PracticingScreen> {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(16),
-                        child: _buildMaterialContent(practiceMaterial, aiService.isGenerating),
+                        child: _showStrumModal
+                            ? const SizedBox.expand()
+                            : _buildMaterialContent(practiceMaterial, aiService.isGenerating),
                       ),
                     ),
                   ),
@@ -648,7 +660,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton(
-                              onPressed: () => setState(() => _showStrumModal = false),
+                              onPressed: _dismissStrumModal,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: t.accent,
                                 padding: const EdgeInsets.symmetric(vertical: 14),
@@ -1091,14 +1103,14 @@ class _MetronomeAudio {
       await _accentPlayer!.setAudioContext(AudioContext(
         android: AudioContextAndroid(
           contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
+          usageType: AndroidUsageType.media,
           audioFocus: AndroidAudioFocus.none,
         ),
       ));
       await _tickPlayer!.setAudioContext(AudioContext(
         android: AudioContextAndroid(
           contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
+          usageType: AndroidUsageType.media,
           audioFocus: AndroidAudioFocus.none,
         ),
       ));
