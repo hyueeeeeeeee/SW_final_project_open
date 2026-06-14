@@ -9,11 +9,7 @@ class InspirationScreen extends StatefulWidget {
   final AppTheme t;
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
 
-  const InspirationScreen({
-    super.key,
-    required this.t,
-    required this.navigate,
-  });
+  const InspirationScreen({super.key, required this.t, required this.navigate});
 
   @override
   State<InspirationScreen> createState() => _InspirationScreenState();
@@ -31,7 +27,9 @@ class _InspirationScreenState extends State<InspirationScreen> {
       stream: appState.feedStream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return Center(child: CircularProgressIndicator(color: widget.t.accent));
+          return Center(
+            child: CircularProgressIndicator(color: widget.t.accent),
+          );
         }
 
         final feedItems = snapshot.data ?? [];
@@ -42,38 +40,59 @@ class _InspirationScreenState extends State<InspirationScreen> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.video_library_outlined, size: 64, color: widget.t.textMuted),
+                Icon(
+                  Icons.video_library_outlined,
+                  size: 64,
+                  color: widget.t.textMuted,
+                ),
                 const SizedBox(height: 16),
-                Text('No inspiration feed yet.', style: TextStyle(color: widget.t.textSec, fontSize: 16)),
+                Text(
+                  'No inspiration feed yet.',
+                  style: TextStyle(color: widget.t.textSec, fontSize: 16),
+                ),
                 const SizedBox(height: 24),
                 if (_isGenerating)
                   Column(
                     children: [
                       CircularProgressIndicator(color: widget.t.accent),
                       const SizedBox(height: 16),
-                      Text('AI is picking songs and fetching videos...', style: TextStyle(color: widget.t.accent)),
+                      Text(
+                        'AI is picking songs and fetching videos...',
+                        style: TextStyle(color: widget.t.accent),
+                      ),
                     ],
                   )
                 else
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: widget.t.accent,
-                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
                     ),
                     onPressed: () async {
                       setState(() => _isGenerating = true);
                       await appState.updateFeed(); // 呼叫 Gemini AI
                       setState(() => _isGenerating = false);
                     },
-                    child: const Text('Ask AI to Generate Feed', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'Ask AI to Generate Feed',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
               ],
             ),
           );
         }
 
-       
         // 找到這個 PageView.builder
         return PageView.builder(
           scrollDirection: Axis.vertical,
@@ -123,8 +142,10 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
   @override
   void initState() {
     super.initState();
-    
-    final videoId = YoutubePlayerController.convertUrlToId(widget.item.videoUrl);
+
+    final videoId = YoutubePlayerController.convertUrlToId(
+      widget.item.videoUrl,
+    );
 
     if (videoId != null) {
       _ytController = YoutubePlayerController.fromVideoId(
@@ -153,13 +174,14 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
         // 背景與影片播放器
         Container(color: Colors.black),
         if (_ytController != null)
-          Center(
-            child: YoutubePlayer(
-              controller: _ytController!,
-            ),
-          )
+          Center(child: YoutubePlayer(controller: _ytController!))
         else
-          const Center(child: Text('Invalid Video URL', style: TextStyle(color: Colors.white))),
+          const Center(
+            child: Text(
+              'Invalid Video URL',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
 
         // 底部漸層遮罩 (為了讓文字清楚)
         Positioned(
@@ -172,7 +194,10 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Colors.black.withValues(alpha: 0.85)],
+                colors: [
+                  Colors.transparent,
+                  Colors.black.withValues(alpha: 0.85),
+                ],
               ),
             ),
           ),
@@ -182,23 +207,42 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
         Positioned(
           bottom: 20,
           left: 20,
-          right: 80, // 留空間給右邊的按鈕
+          right: 20,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                widget.item.title,
-                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Colors.white),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '${widget.item.artist} · ${widget.item.genre}',
-                style: const TextStyle(fontSize: 16, color: Colors.white70),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                widget.item.description,
-                style: const TextStyle(fontSize: 15, color: Colors.white, height: 1.4),
+              Padding(
+                padding: const EdgeInsets.only(right: 64),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.item.title,
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${widget.item.artist} · ${widget.item.genre}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      widget.item.description,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: Colors.white,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 20),
               SizedBox(
@@ -207,12 +251,14 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: widget.t.accent,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                   ),
                   onPressed: () async {
                     final existingId = await widget.appState.findExistingSongId(
-                      widget.item.title, 
-                      widget.item.artist
+                      widget.item.title,
+                      widget.item.artist,
                     );
                     if (existingId != null) {
                       // 1. 如果已存在，設定高亮 ID
@@ -221,17 +267,36 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
                       widget.navigate('library');
                       print('🔍 發現重複，跳轉至 Library 並發光');
                     } else {
-                    await widget.appState.searchSongToLibrary(widget.item.title, widget.item.artist);
-                      widget.navigate('practicing', props: {
-                        'title': widget.item.title,
-                        'artist': widget.item.artist,
-                      });
+                      await widget.appState.searchSongToLibrary(
+                        widget.item.title,
+                        widget.item.artist,
+                      );
+                      widget.navigate(
+                        'practicing',
+                        props: {
+                          'title': widget.item.title,
+                          'artist': widget.item.artist,
+                        },
+                      );
                     }
                     // 💡 點擊練習，自動將歌加入 Library，並跳轉
-                    widget.appState.searchSongToLibrary(widget.item.title, widget.item.artist);
-                    widget.navigate('practicing', props: {'title': widget.item.title});
+                    widget.appState.searchSongToLibrary(
+                      widget.item.title,
+                      widget.item.artist,
+                    );
+                    widget.navigate(
+                      'practicing',
+                      props: {'title': widget.item.title},
+                    );
                   },
-                  child: const Text("Let's practice", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  child: const Text(
+                    "Let's practice",
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -244,12 +309,12 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
                       color: Colors.white70,
-                      decoration: TextDecoration.underline, // 加上底線
+                      decoration: TextDecoration.underline,
                       decorationColor: Colors.white38,
                     ),
                   ),
                 ),
-              )
+              ),
             ],
           ),
         ),
@@ -257,37 +322,69 @@ class _VideoFeedItemState extends State<_VideoFeedItem> {
         // 互動按鈕 (右下角)
         Positioned(
           right: 16,
-          bottom: 100,
+          bottom: 160,
           child: Column(
             children: [
               // Like
               GestureDetector(
-                onTap: () => widget.appState.setFeedItemAction(widget.item.id, widget.item.actionState, 'liked'),
+                onTap: () => widget.appState.setFeedItemAction(
+                  widget.item.id,
+                  widget.item.actionState,
+                  'liked',
+                ),
                 child: Column(
                   children: [
                     Icon(
-                      widget.item.actionState == 'liked' ? Icons.thumb_up : Icons.thumb_up_outlined,
+                      widget.item.actionState == 'liked'
+                          ? Icons.favorite
+                          : Icons.favorite_border,
                       size: 36,
-                      color: widget.item.actionState == 'liked' ? widget.t.accent : Colors.white,
+                      color: widget.item.actionState == 'liked'
+                          ? widget.t.accent
+                          : Colors.white,
                     ),
                     const SizedBox(height: 4),
-                    Text('Like', style: TextStyle(color: widget.item.actionState == 'liked' ? widget.t.accent : Colors.white, fontSize: 12)),
+                    Text(
+                      'More',
+                      style: TextStyle(
+                        color: widget.item.actionState == 'liked'
+                            ? widget.t.accent
+                            : Colors.white,
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
               // Dislike
               GestureDetector(
-                onTap: () => widget.appState.setFeedItemAction(widget.item.id, widget.item.actionState, 'disliked'),
+                onTap: () => widget.appState.setFeedItemAction(
+                  widget.item.id,
+                  widget.item.actionState,
+                  'disliked',
+                ),
                 child: Column(
                   children: [
                     Icon(
-                      widget.item.actionState == 'disliked' ? Icons.thumb_down : Icons.thumb_down_outlined,
+                      widget.item.actionState == 'disliked'
+                          ? Icons.remove_circle
+                          : Icons.remove_circle_outline,
                       size: 36,
-                      color: widget.item.actionState == 'disliked' ? Colors.red : Colors.white,
+                      color: widget.item.actionState == 'disliked'
+                          ? Colors.red
+                          : Colors.white,
                     ),
                     const SizedBox(height: 4),
-                    Text('Dislike', style: TextStyle(color: widget.item.actionState == 'disliked' ? Colors.red : Colors.white, fontSize: 12)),
+                    Text(
+                      'Less',
+                      style: TextStyle(
+                        color: widget.item.actionState == 'disliked'
+                            ? Colors.red
+                            : Colors.white,
+                        fontSize: 12,
+                      ),
+                    ),
                   ],
                 ),
               ),
