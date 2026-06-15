@@ -5,7 +5,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../theme.dart';
 import 'song.dart';
 
-
 class DiaryEntry {
   final DateTime date;
   final String title;
@@ -13,18 +12,24 @@ class DiaryEntry {
   final int duration; // seconds
   final String userNote;
 
-  DiaryEntry({required this.date, required this.title, required this.artist, required this.duration, this.userNote = ''});
+  DiaryEntry({
+    required this.date,
+    required this.title,
+    required this.artist,
+    required this.duration,
+    this.userNote = '',
+  });
 }
 // =====================================================================
 
 class AppState extends ChangeNotifier {
   bool _darkMode = false;
   bool _isLoadingAddSong = false;
-  
+
   // 保留給商城、Profile 的舊狀態
-  int _coins = 340; 
+  int _coins = 340;
   Set<String> _ownedItems = {'streak_shield_1'};
-  final List<DiaryEntry> _diaryEntries = []; 
+  final List<DiaryEntry> _diaryEntries = [];
 
   bool get darkMode => _darkMode;
   Color get accent => AppColors.accent;
@@ -45,33 +50,40 @@ class AppState extends ChangeNotifier {
     _coins -= amount;
     notifyListeners();
   }
-  
+
   void addOwnedItem(String id) {
     _ownedItems = {..._ownedItems, id};
     notifyListeners();
   }
-  
+
   void addDiaryEntry(DiaryEntry entry) {
     _diaryEntries.insert(0, entry);
     notifyListeners();
   }
-  
+
   void updateLatestDiaryNote(String note) {
     if (_diaryEntries.isNotEmpty) {
       final e = _diaryEntries[0];
-      _diaryEntries[0] = DiaryEntry(date: e.date, title: e.title, artist: e.artist, duration: e.duration, userNote: note);
+      _diaryEntries[0] = DiaryEntry(
+        date: e.date,
+        title: e.title,
+        artist: e.artist,
+        duration: e.duration,
+        userNote: note,
+      );
       notifyListeners();
     }
   }
 
   //ccc
-   String? _highlightedSongId;
-    String? get highlightedSongId => _highlightedSongId;
+  String? _highlightedSongId;
+  String? get highlightedSongId => _highlightedSongId;
 
-    void setHighlightedSong(String? id) {
-      _highlightedSongId = id;
-      notifyListeners();
-    }
+  void setHighlightedSong(String? id) {
+    _highlightedSongId = id;
+    notifyListeners();
+  }
+
   Future<String?> findExistingSongId(String title, String artist) async {
     final uid = currentUserId;
     final query = await FirebaseFirestore.instance
@@ -89,9 +101,8 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  
-  
-  String get currentUserId => FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
+  String get currentUserId =>
+      FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
 
   // 監聽 Library 歌單
   Stream<List<SongEntry>> get libraryStream {
@@ -100,7 +111,9 @@ class AppState extends ChangeNotifier {
         .doc(currentUserId)
         .collection('songLibrary')
         .snapshots()
-        .map((snap) => snap.docs.map((d) => SongEntry.fromFirestore(d)).toList());
+        .map(
+          (snap) => snap.docs.map((d) => SongEntry.fromFirestore(d)).toList(),
+        );
   }
 
   // 監聽 Inspiration Feed 短影音
@@ -111,16 +124,18 @@ class AppState extends ChangeNotifier {
         .collection('feed')
         .orderBy('createdAt', descending: false)
         .snapshots()
-        .map((snap) => snap.docs.map((d) => FeedItem.fromFirestore(d)).toList());
+        .map(
+          (snap) => snap.docs.map((d) => FeedItem.fromFirestore(d)).toList(),
+        );
   }
 
   // Library Page: 呼叫 AI 搜尋歌曲資訊
- // ... 前面的 import 不變
+  // ... 前面的 import 不變
 
-// Library Page: 呼叫 AI 搜尋歌曲資訊
-// ... 其他部分不變
+  // Library Page: 呼叫 AI 搜尋歌曲資訊
+  // ... 其他部分不變
 
-// Library Page: 呼叫 AI 搜尋歌曲資訊
+  // Library Page: 呼叫 AI 搜尋歌曲資訊
   Future<SongEntry?> searchSongToLibrary(String title, String artist) async {
     _isLoadingAddSong = true;
     notifyListeners();
@@ -130,31 +145,35 @@ class AppState extends ChangeNotifier {
       print('ℹ️ 歌曲已存在，準備進入練習頁面');
       _isLoadingAddSong = false;
       notifyListeners();
-      
+
       // 💡 取得已存在的歌曲資料回傳
       final doc = await FirebaseFirestore.instance
-          .collection('users').doc(currentUserId)
-          .collection('songLibrary').doc(existingId).get();
+          .collection('users')
+          .doc(currentUserId)
+          .collection('songLibrary')
+          .doc(existingId)
+          .get();
       return SongEntry.fromFirestore(doc);
     }
 
     try {
       // 呼叫雲端 Function
-      final result = await FirebaseFunctions.instance.httpsCallable('searchSong').call({
-        'title': title,
-        'artist': artist,
-      });
-      
-       if (result.data['songId'] != null) {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('searchSong')
+          .call({'title': title, 'artist': artist});
+
+      if (result.data['songId'] != null) {
         final newId = result.data['songId'];
         // 💡 取得剛新增成功的歌曲資料回傳
         final doc = await FirebaseFirestore.instance
-            .collection('users').doc(currentUserId)
-            .collection('songLibrary').doc(newId).get();
-        
+            .collection('users')
+            .doc(currentUserId)
+            .collection('songLibrary')
+            .doc(newId)
+            .get();
+
         return SongEntry.fromFirestore(doc);
       }
-      
     } catch (e) {
       print('⚠️ 雲端失敗，進入本地保險機制: $e');
       // ... (保留你原本 catch 裡面的保險機制程式碼即可)
@@ -162,21 +181,27 @@ class AppState extends ChangeNotifier {
       _isLoadingAddSong = false;
       notifyListeners();
     }
-     return null;
+    return null;
   }
 
   // 2. 修正按讚取消邏輯
-  Future<void> setFeedItemAction(String feedItemId, String currentAction, String newAction) async {
+  Future<void> setFeedItemAction(
+    String feedItemId,
+    String currentAction,
+    String newAction,
+  ) async {
     // 如果點擊的跟原本的一樣，就取消 (變回 ignored)
     final finalAction = (currentAction == newAction) ? 'ignored' : newAction;
-    
+
     await FirebaseFirestore.instance
-        .collection('users').doc(currentUserId)
-        .collection('feed').doc(feedItemId)
+        .collection('users')
+        .doc(currentUserId)
+        .collection('feed')
+        .doc(feedItemId)
         .update({'actionState': finalAction});
   }
 
- // 💡 新增一把鎖：用來防止使用者狂滑導致重複呼叫
+  // 💡 新增一把鎖：用來防止使用者狂滑導致重複呼叫
   bool _isGeneratingFeed = false;
   bool get isGeneratingFeed => _isGeneratingFeed;
 
@@ -184,7 +209,7 @@ class AppState extends ChangeNotifier {
   Future<void> updateFeed() async {
     // 💡 防呆機制：如果 AI 已經在努力想歌了，就直接擋掉後續的呼叫！
     if (_isGeneratingFeed) {
-      return; 
+      return;
     }
 
     _isGeneratingFeed = true;
@@ -202,8 +227,12 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
   // --- Library Page: 封存、最愛狀態切換 ---
-  Future<void> updateSongStatus(String songId, Map<String, dynamic> data) async {
+  Future<void> updateSongStatus(
+    String songId,
+    Map<String, dynamic> data,
+  ) async {
     try {
       await FirebaseFirestore.instance
           .collection('users')
@@ -243,13 +272,17 @@ class AiMaterialService extends ChangeNotifier {
     _isGenerating = true;
     notifyListeners();
 
-    debugPrint('➔ [AI Service] Loading practice material for $song ($artist)...');
+    debugPrint(
+      '➔ [AI Service] Loading practice material for $song ($artist)...',
+    );
 
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
       final snap = await FirebaseFirestore.instance
-          .collection('users').doc(uid)
-          .collection('songLibrary').doc(songId)
+          .collection('users')
+          .doc(uid)
+          .collection('songLibrary')
+          .doc(songId)
           .collection('practiceMaterials')
           .where('active', isEqualTo: true)
           .where('type', isEqualTo: 'video')
@@ -266,7 +299,9 @@ class AiMaterialService extends ChangeNotifier {
         debugPrint('➔ [AI Service] Loaded video: ${_currentMaterial!['url']}');
       } else {
         _currentMaterial = null;
-        debugPrint('➔ [AI Service] No practice material found for songId=$songId');
+        debugPrint(
+          '➔ [AI Service] No practice material found for songId=$songId',
+        );
       }
     } catch (e) {
       debugPrint('➔ [AI Service] Error loading material: $e');

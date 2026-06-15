@@ -3,7 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:mic_stream/mic_stream.dart';
+import 'package:record/record.dart';
 import 'package:pitch_detector_dart/pitch_detector.dart';
 import '../theme.dart';
 import 'package:provider/provider.dart';
@@ -61,6 +61,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
 
   // Tuner — real microphone pitch detection
   StreamSubscription<Uint8List>? _micSub;
+  final AudioRecorder _record = AudioRecorder();
   late final PitchDetector _pitchDetector;
   final List<int> _rawBuffer = [];
   double _tunerFreq = 0;
@@ -116,6 +117,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
     _micSub?.cancel();
     _metroAudio?.release();
     _ytController?.close();
+    _record.dispose();
     super.dispose();
   }
 
@@ -168,13 +170,14 @@ class _PracticingScreenState extends State<PracticingScreen> {
       _tunerNote = '--';
     });
     try {
-      // v0.6.x API: returns Future<Stream<Uint8List>?>
-      final stream = await MicStream.microphone(
-        sampleRate: 44100,
-        audioFormat: AudioFormat.ENCODING_PCM_16BIT,
-      );
-      
-      _micSub = stream.listen(
+      if (await _record.hasPermission()) {
+        final stream = await _record.startStream(const RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: 44100,
+          numChannels: 1,
+        ));
+        
+        _micSub = stream.listen(
         (chunk) {
           _rawBuffer.addAll(chunk);
           // Cap to ~0.5 s of audio (44100 Hz × 2 bytes/sample = 88200 bytes)
@@ -194,7 +197,10 @@ class _PracticingScreenState extends State<PracticingScreen> {
           debugPrint('Tuner stream error: $e');
           if (mounted) setState(() => _tunerPermDenied = true);
         },
-      );
+        );
+      } else {
+        if (mounted) setState(() => _tunerPermDenied = true);
+      }
     } catch (e) {
       debugPrint('Tuner mic error: $e');
       if (mounted) setState(() => _tunerPermDenied = true);
@@ -245,9 +251,10 @@ class _PracticingScreenState extends State<PracticingScreen> {
     return (names[noteIdx], octave, cents);
   }
 
-  void _stopTuner() {
+  void _stopTuner() async {
     _micSub?.cancel();
     _micSub = null;
+    await _record.stop();
     _rawBuffer.clear();
     if (mounted) setState(() { _tunerPitched = false; _tunerNote = '--'; });
   }

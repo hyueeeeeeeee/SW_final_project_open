@@ -1197,18 +1197,16 @@ PODS:
   - BoringSSL-GRPC/Implementation (0.0.37):
     - BoringSSL-GRPC/Interface (= 0.0.37)
   - BoringSSL-GRPC/Interface (0.0.37)
-  - camera_avfoundation (0.0.1):
-    - Flutter
   - cloud_firestore (6.5.0):
-    - Firebase/Firestore (= 12.14.0)
+    - Firebase/CoreOnly (~> 12.14.0)
+    - Firebase/Firestore (~> 12.14.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - cloud_functions (6.3.2):
-    - Firebase/Functions (= 12.14.0)
+    - Firebase/CoreOnly (~> 12.14.0)
+    - Firebase/Functions (~> 12.14.0)
     - firebase_core
-    - Flutter
-  - device_calendar (0.0.1):
-    - Flutter
+    - FlutterMacOS
   - Firebase/Auth (12.14.0):
     - Firebase/CoreOnly
     - FirebaseAuth (~> 12.14.0)
@@ -1221,12 +1219,13 @@ PODS:
     - Firebase/CoreOnly
     - FirebaseFunctions (~> 12.14.0)
   - firebase_auth (6.5.2):
-    - Firebase/Auth (= 12.14.0)
+    - Firebase/Auth (~> 12.14.0)
+    - Firebase/CoreOnly (~> 12.14.0)
     - firebase_core
-    - Flutter
+    - FlutterMacOS
   - firebase_core (4.10.0):
-    - Firebase/CoreOnly (= 12.14.0)
-    - Flutter
+    - Firebase/CoreOnly (~> 12.14.0)
+    - FlutterMacOS
   - FirebaseAppCheckInterop (12.14.0)
   - FirebaseAuth (12.14.0):
     - FirebaseAppCheckInterop (~> 12.14.0)
@@ -1276,9 +1275,7 @@ PODS:
     - GTMSessionFetcher/Core (< 6.0, >= 3.4)
   - FirebaseMessagingInterop (12.14.0)
   - FirebaseSharedSwift (12.14.0)
-  - Flutter (1.0.0)
-  - flutter_local_notifications (0.0.1):
-    - Flutter
+  - FlutterMacOS (1.0.0)
   - GoogleUtilities/AppDelegateSwizzler (8.1.1):
     - GoogleUtilities/Environment
     - GoogleUtilities/Logger
@@ -1399,35 +1396,28 @@ PODS:
     - nanopb/encode (= 3.30910.0)
   - nanopb/decode (3.30910.0)
   - nanopb/encode (3.30910.0)
-  - permission_handler_apple (9.4.8):
-    - Flutter
-  - RecaptchaInterop (101.0.0)
-  - record_ios (1.2.1):
-    - Flutter
+  - record_macos (1.2.1):
+    - FlutterMacOS
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - url_launcher_ios (0.0.1):
-    - Flutter
+  - url_launcher_macos (0.0.1):
+    - FlutterMacOS
   - webview_flutter_wkwebview (0.0.1):
     - Flutter
     - FlutterMacOS
 
 DEPENDENCIES:
-  - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/darwin`)
-  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
-  - cloud_firestore (from `.symlinks/plugins/cloud_firestore/ios`)
-  - cloud_functions (from `.symlinks/plugins/cloud_functions/ios`)
-  - device_calendar (from `.symlinks/plugins/device_calendar/ios`)
-  - firebase_auth (from `.symlinks/plugins/firebase_auth/ios`)
-  - firebase_core (from `.symlinks/plugins/firebase_core/ios`)
-  - Flutter (from `Flutter`)
-  - flutter_local_notifications (from `.symlinks/plugins/flutter_local_notifications/ios`)
-  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
-  - record_ios (from `.symlinks/plugins/record_ios/ios`)
-  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
-  - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
-  - webview_flutter_wkwebview (from `.symlinks/plugins/webview_flutter_wkwebview/darwin`)
+  - audioplayers_darwin (from `Flutter/ephemeral/.symlinks/plugins/audioplayers_darwin/darwin`)
+  - cloud_firestore (from `Flutter/ephemeral/.symlinks/plugins/cloud_firestore/macos`)
+  - cloud_functions (from `Flutter/ephemeral/.symlinks/plugins/cloud_functions/macos`)
+  - firebase_auth (from `Flutter/ephemeral/.symlinks/plugins/firebase_auth/macos`)
+  - firebase_core (from `Flutter/ephemeral/.symlinks/plugins/firebase_core/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - record_macos (from `Flutter/ephemeral/.symlinks/plugins/record_macos/macos`)
+  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - url_launcher_macos (from `Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos`)
+  - webview_flutter_wkwebview (from `Flutter/ephemeral/.symlinks/plugins/webview_flutter_wkwebview/darwin`)
 
 SPEC REPOS:
   trunk:
@@ -1451,49 +1441,38 @@ SPEC REPOS:
     - GTMSessionFetcher
     - leveldb-library
     - nanopb
-    - RecaptchaInterop
 
 EXTERNAL SOURCES:
   audioplayers_darwin:
-    :path: ".symlinks/plugins/audioplayers_darwin/darwin"
-  camera_avfoundation:
-    :path: ".symlinks/plugins/camera_avfoundation/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/audioplayers_darwin/darwin
   cloud_firestore:
-    :path: ".symlinks/plugins/cloud_firestore/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/cloud_firestore/macos
   cloud_functions:
-    :path: ".symlinks/plugins/cloud_functions/ios"
-  device_calendar:
-    :path: ".symlinks/plugins/device_calendar/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/cloud_functions/macos
   firebase_auth:
-    :path: ".symlinks/plugins/firebase_auth/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_auth/macos
   firebase_core:
-    :path: ".symlinks/plugins/firebase_core/ios"
-  Flutter:
-    :path: Flutter
-  flutter_local_notifications:
-    :path: ".symlinks/plugins/flutter_local_notifications/ios"
-  permission_handler_apple:
-    :path: ".symlinks/plugins/permission_handler_apple/ios"
-  record_ios:
-    :path: ".symlinks/plugins/record_ios/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_core/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  record_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/record_macos/macos
   shared_preferences_foundation:
-    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
-  url_launcher_ios:
-    :path: ".symlinks/plugins/url_launcher_ios/ios"
+    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin
+  url_launcher_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos
   webview_flutter_wkwebview:
-    :path: ".symlinks/plugins/webview_flutter_wkwebview/darwin"
+    :path: Flutter/ephemeral/.symlinks/plugins/webview_flutter_wkwebview/darwin
 
 SPEC CHECKSUMS:
   abseil: a05cc83bf02079535e17169a73c5be5ba47f714b
   audioplayers_darwin: 835ced6edd4c9fc8ebb0a7cc9e294a91d99917d5
   BoringSSL-GRPC: dded2a44897e45f28f08ae87a55ee4bcd19bc508
-  camera_avfoundation: 968a9a5323c79a99c166ad9d7866bfd2047b5a9b
-  cloud_firestore: 0b00f29ae2bb05adf7b0624b4aa883861a59761d
-  cloud_functions: 18bff3a9a3a018512bef4b70535f3f5326bc5e24
-  device_calendar: b55b2c5406cfba45c95a59f9059156daee1f74ed
+  cloud_firestore: febe21c133cb1b8aab92d8204b70d08bfdcf91d1
+  cloud_functions: bd9b1d17e50f4f38fc9ed208cc2f43abef2eccf4
   Firebase: 7cc10425300768ec86292688af5cb228f0604bde
-  firebase_auth: d4091ec40b52cc2ea56171ea521c30b388844acb
-  firebase_core: 383e19b49a08df5d7a6cf5017616de6a357ed7af
+  firebase_auth: 89d373337c82c44d9083d396490d850a5123bd71
+  firebase_core: 6c25555337efe4f9288389c14373ddd107790d90
   FirebaseAppCheckInterop: f123c0261a7b46f060e98fc2961651f1ac68f384
   FirebaseAuth: 01a77d472aec77ec008141e7d859d1b9cb8dc2cf
   FirebaseAuthInterop: 63056ef7f9602e79a8f8d756d4cb35f38e2927c3
@@ -1505,21 +1484,18 @@ SPEC CHECKSUMS:
   FirebaseFunctions: 5ccef4817f5a5fc0024f3d5dfc1fbbcf0744d07d
   FirebaseMessagingInterop: e835049cc41a4c6c71781eaceee113b2601cd89d
   FirebaseSharedSwift: 7c659ebf23afdc1e60a05df72a07ad7349f5758f
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  flutter_local_notifications: 395056b3175ba4f08480a7c5de30cd36d69827e4
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   GoogleUtilities: 4f2618a4a1e762a1ee134a1e2323bba9843e06da
   "gRPC-C++": cc207623316fb041a7a3e774c252cf68a058b9e8
   gRPC-Core: 860978b7db482de8b4f5e10677216309b5ff6330
   GTMSessionFetcher: 127211aeec0b1e904fc49f4f6f895dcc535b0ecf
   leveldb-library: cc8b8f8e013647a295ad3f8cd2ddf49a6f19be19
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
-  permission_handler_apple: 92d754bbaa7361d436db2d6c3c1c2a0fdcec462e
-  RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
-  record_ios: 980fd386a97a35987d0fce3dfda4b26a38c90f4c
+  record_macos: 5d55909f9650314be6424ffd6b123ac75a08c3c1
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
-  url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
+  url_launcher_macos: f87a979182d112f911de6820aefddaf56ee9fbfd
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 
-PODFILE CHECKSUM: cbca4ceca56bf8e4d8b353c323b8ad7a3e29b473
+PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
 
 COCOAPODS: 1.16.2

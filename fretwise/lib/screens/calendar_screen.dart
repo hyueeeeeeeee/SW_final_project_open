@@ -66,26 +66,59 @@ class _CalendarScreenState extends State<CalendarScreen>
       _fetchExternalCalendar();
     } else if (state == AppLifecycleState.resumed) {
       // 使用者回到 App 時，重新檢查權限狀態
-      _refreshPermissionStatus();
+      _checkCalendarPermission();
     }
   }
 
   /// 檢查目前的行事曆權限狀態（不彈對話框）
-  Future<void> _refreshPermissionStatus() async {
-    final result = await _deviceCalendarPlugin.hasPermissions();
-    if (mounted) {
-      setState(() {
-        _calendarPermissionGranted = result.isSuccess && (result.data ?? false);
-      });
+  Future<void> _checkCalendarPermission() async {
+    try {
+      final result = await _deviceCalendarPlugin.hasPermissions();
+      if (mounted) {
+        setState(() {
+          _calendarPermissionGranted = result.isSuccess && (result.data ?? false);
+        });
+      }
+    } catch (e) {
+      print(e);
+      if (mounted) setState(() => _calendarPermissionGranted = false);
+    }
+  }
+
+  Future<void> _requestCalendarPermission() async {
+    try {
+      final result = await _deviceCalendarPlugin.hasPermissions();
+      if (result.isSuccess && (result.data ?? false)) {
+        // 已經有權限
+        if (mounted) setState(() => _calendarPermissionGranted = true);
+        return;
+      }
+
+      final requestResult = await _deviceCalendarPlugin.requestPermissions();
+      if (mounted) {
+        setState(() {
+          _calendarPermissionGranted =
+              requestResult.isSuccess && (requestResult.data ?? false);
+        });
+      }
+    } catch (e) {
+      print("requestPermissions fail: $e");
+      if (mounted) setState(() => _calendarPermissionGranted = false);
     }
   }
 
   /// 首次進入時，用友善對話框提示使用者允許行事曆存取
   Future<void> _checkAndRequestCalendarPermission() async {
-    final result = await _deviceCalendarPlugin.hasPermissions();
-    if (result.isSuccess && (result.data ?? false)) {
-      // 已經有權限
-      if (mounted) setState(() => _calendarPermissionGranted = true);
+    try {
+      final result = await _deviceCalendarPlugin.hasPermissions();
+      if (result.isSuccess && (result.data ?? false)) {
+        // 已經有權限
+        if (mounted) setState(() => _calendarPermissionGranted = true);
+        return;
+      }
+    } catch (e) {
+      print("checkAndRequestCalendarPermission error: $e");
+      if (mounted) setState(() => _calendarPermissionGranted = false);
       return;
     }
 
@@ -203,16 +236,20 @@ class _CalendarScreenState extends State<CalendarScreen>
   // 讀取外部行事曆（未來 7 天）
   Future<void> _fetchExternalCalendar({bool forceSync = false}) async {
     bool hasPermission = false;
-    var permissionsGranted = await _deviceCalendarPlugin.hasPermissions();
-    if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
-      permissionsGranted = await _deviceCalendarPlugin.requestPermissions();
-      if (permissionsGranted.isSuccess && permissionsGranted.data!) {
+    try {
+      var permissionsGranted = await _deviceCalendarPlugin.hasPermissions();
+      if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
+        permissionsGranted = await _deviceCalendarPlugin.requestPermissions();
+        if (permissionsGranted.isSuccess && permissionsGranted.data!) {
+          hasPermission = true;
+        } else {
+          print("使用者拒絕了行事曆權限，將無法讀取真實行事曆。");
+        }
+      } else if (permissionsGranted.isSuccess && permissionsGranted.data!) {
         hasPermission = true;
-      } else {
-        print("使用者拒絕了行事曆權限，將無法讀取真實行事曆。");
       }
-    } else if (permissionsGranted.isSuccess && permissionsGranted.data!) {
-      hasPermission = true;
+    } catch (e) {
+      print("檢查行事曆權限失敗（可能是不支援的平台）：$e");
     }
 
     List<dynamic> calendars = [];

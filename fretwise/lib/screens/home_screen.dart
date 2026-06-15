@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme.dart';
+import '../utils/notification_manager.dart';
 import '../widgets/album_art.dart';
 import '../widgets/section_header.dart';
 import '../widgets/progress_bar.dart';
@@ -18,11 +19,13 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Stack(
+      children: [
+        SingleChildScrollView(
+          padding: const EdgeInsets.only(bottom: 80), // Increased bottom padding for FAB
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           // Greeting row
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
@@ -278,6 +281,19 @@ class HomeScreen extends StatelessWidget {
           ),
         ],
       ),
+    ),
+    Positioned(
+          bottom: 20,
+          right: 20,
+          child: FloatingActionButton(
+            backgroundColor: t.accent,
+            onPressed: () {
+              NotificationManager().scheduleTestNotification();
+            },
+            child: const Icon(Icons.notifications_active, color: Colors.white),
+          ),
+        ),
+      ],
     );
   }
 }
