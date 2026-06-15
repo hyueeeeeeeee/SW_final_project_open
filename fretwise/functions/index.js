@@ -200,7 +200,8 @@ async function updatePlanSkill(args, uid) {
       eventCount: externalCalendar.length,
     });
 
-    try {
+    let text;
+  try {
       // 2. Read user data from Firestore
       const userDoc = await db.collection("users").doc(uid).get();
       const userData = userDoc.exists ? userDoc.data() : {};
@@ -250,7 +251,8 @@ async function updatePlanSkill(args, uid) {
           weakTechniques: profile.weakTechniques || [],
           strongTechniques: profile.strongTechniques || [],
           preferredSessionMinutes: profile.preferredSessionMinutes || 20,
-          preferredDayAndTime: profile.preferredDayAndTime || null,
+          preferredDayAndTime: userData.preferredDayAndTime || profile.preferredDayAndTime || null,
+          dayAndTimeRule: userData.DayAndTimeRule || null,
         },
         preferences: {
           favoriteGenres: preferences.favoriteGenres || [],
@@ -289,28 +291,34 @@ async function updatePlanSkill(args, uid) {
         systemInstruction: AGENT_SYSTEM_PROMPT,
       });
 
-      const userPrompt = `Here is the user's data. Generate a 7-day practice plan based on this information:\n\n${JSON.stringify(aiInput, null, 2)}`;
+      const userPrompt = `Here is the user's data. Generate a 4-week (28-day) practice plan based on this information.
 
+CRITICAL CONSTRAINTS:
+1. DO NOT schedule ANY practice on days that conflict heavily with the 'externalCalendar' events. If a day has many busy events on 'preferredDayAndTime', CANCEL the practice for that day completely (schedule 0 minutes).
+2. STRICTLY follow the 'dayAndTimeRule' string. If the user explicitly asks to skip a certain date (e.g., "skip June 21, 2026"), you MUST NOT schedule any practice on that date (0 minutes).
+3. The generated plan must cover exactly 28 days starting from 'today'.
+4. VERY IMPORTANT: You have a strict output token limit. Keep all text fields (like "instructions" and "summary") EXTREMELY short (1-2 sentences max). Limit the number of tasks per day to at most 2-3 to ensure the entire 28-day JSON plan fits in the response without being truncated.
+
+User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
+
+    // removed extra try
       logger.info("Calling Gemini AI...");
       const result = await model.generateContent(userPrompt);
       const response = result.response;
-      const text = response.candidates[0].content.parts[0].text;
+      text = response.candidates[0].content.parts[0].text;
 
       logger.info("Gemini AI response received", {
         responseLength: text.length,
       });
 
       // 7. Parse AI response
-      let aiOutput;
-      try {
-        aiOutput = JSON.parse(text);
-      } catch (parseErr) {
-        logger.error("Failed to parse AI response", { text, parseErr });
-        throw new HttpsError(
-          "internal",
-          "AI returned invalid JSON. Please try again."
-        );
-      }
+      const cleanJsonStr = text.replace(/```json\n?|```/g, "").trim();
+      const aiOutput = JSON.parse(cleanJsonStr);
+
+      // 7. Extract items
+      const planObj = aiOutput.practicePlan || {};
+      const daysArr = aiOutput.practiceDays || [];
+      const tasksArr = aiOutput.practiceTasks || [];
 
       // Validate required fields
       if (
@@ -346,7 +354,7 @@ async function updatePlanSkill(args, uid) {
       // 8a. Write PracticePlan
       const planRef = userRef.collection("practicePlans").doc(planId);
       batch.set(planRef, {
-        ...aiOutput.practicePlan,
+        ...planObj,
         status: "active",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -358,7 +366,7 @@ async function updatePlanSkill(args, uid) {
       });
 
       // 8c. Write PracticeDays
-      for (const day of aiOutput.practiceDays) {
+      for (const day of daysArr) {
         if (!day.date) continue;
         const dayRef = userRef.collection("practiceDays").doc(day.date);
         batch.set(
@@ -379,8 +387,8 @@ async function updatePlanSkill(args, uid) {
       }
 
       // 8d. Write PracticeTasks
-      for (let i = 0; i < aiOutput.practiceTasks.length; i++) {
-        const task = aiOutput.practiceTasks[i];
+      for (let i = 0; i < tasksArr.length; i++) {
+        const task = tasksArr[i];
         const taskId = `task_${planId}_${i}`;
         const taskRef = userRef.collection("practiceTasks").doc(taskId);
         batch.set(taskRef, {
@@ -413,27 +421,23 @@ async function updatePlanSkill(args, uid) {
 
       logger.info("Practice plan written to Firestore", {
         planId,
-        daysCount: aiOutput.practiceDays.length,
-        tasksCount: aiOutput.practiceTasks.length,
+        daysCount: daysArr.length,
+        tasksCount: tasksArr.length,
       });
 
       return {
         success: true,
         planId,
-        message: `Practice plan "${aiOutput.practicePlan.title}" created with ${aiOutput.practiceTasks.length} tasks over ${aiOutput.practiceDays.length} days.`,
+        message: `Practice plan "${planObj.title || "Unknown"}" created with ${tasksArr.length} tasks over ${daysArr.length} days.`,
       };
     } catch (err) {
-      if (err instanceof HttpsError) throw err;
-      logger.error("updatePlan failed", { error: err.message, stack: err.stack });
-      throw new HttpsError(
-        "internal",
-        `Failed to update practice plan: ${err.message}`
-      );
+      logger.error("updatePlan failed", { error: err.message, stack: err.stack, responseText: typeof text !== 'undefined' ? text : null });
+      throw new HttpsError("internal", err.message === "Unexpected end of JSON input" || err instanceof SyntaxError ? "AI returned invalid JSON. End of string: " + (typeof text !== 'undefined' ? text.substring(text.length - 500) : 'undefined') : err.message);
     }
   
 }
 
-exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"] }, async (request) => {
+exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"], timeoutSeconds: 300 }, async (request) => {
   const uid = request.auth ? request.auth.uid : "test_user_123";
   return updatePlanSkill(request.data, uid);
 });

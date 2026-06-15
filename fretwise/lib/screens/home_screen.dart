@@ -283,8 +283,8 @@ class HomeScreen extends StatelessWidget {
       ),
     ),
     Positioned(
-          bottom: 20,
-          right: 20,
+          bottom: 90,
+          left: 20,
           child: FloatingActionButton(
             backgroundColor: t.accent,
             onPressed: () {
