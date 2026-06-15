@@ -96,9 +96,12 @@ async function generateMaterialSkill(args, uid, context) {
   console.log(`[SKILL] generateMaterial called! uid=${uid} args=${JSON.stringify(args)}`);
 
   const db = admin.firestore();
-  const { activeSongTitle: ctxTitle, activeSongArtist: ctxArtist } = context || {};
-  const songTitle  = args.songTitle  || ctxTitle  || null;
-  const songArtist = args.songArtist || ctxArtist || null;
+  const { activeSongTitle: ctxTitle, activeSongArtist: ctxArtist, activeSongId: ctxSongId } = context || {};
+  let songTitle  = args.songTitle  || ctxTitle  || null;
+  let songArtist = args.songArtist || ctxArtist || null;
+  const songId   = ctxSongId || null;
+
+  console.log(`[generateMaterial] resolved songTitle=${songTitle} songArtist=${songArtist} songId=${songId}`);
 
   // Read stored materialRules so we can check for subset and always include them in the prompt
   let storedMaterialRules = null;
@@ -169,29 +172,52 @@ async function generateMaterialSkill(args, uid, context) {
     };
   }
 
-  // Load the active song doc and its existing materials
+  // Load the active song doc and its existing materials.
+  // Prefer a direct lookup by Firestore doc ID (reliable); fall back to title/artist query.
   let songDocRef = null;
   let existingMaterials = [];
 
   try {
-    let query = db.collection('users').doc(uid).collection('songLibrary')
-      .where('title', '==', songTitle);
-    if (songArtist) query = query.where('artist', '==', songArtist);
-    const songSnap = await query.limit(1).get();
+    if (songId) {
+      const directRef = db.collection('users').doc(uid).collection('songLibrary').doc(songId);
+      const directSnap = await directRef.get();
+      if (directSnap.exists) {
+        songDocRef = directRef;
+        if (!songTitle) songTitle = directSnap.data().title;
+        if (!songArtist) songArtist = directSnap.data().artist;
+        console.log(`[generateMaterial] song found by id=${songId}`);
+      } else {
+        console.warn(`[generateMaterial] songId=${songId} not found under uid=${uid}`);
+      }
+    }
 
-    if (!songSnap.empty) {
-      songDocRef = songSnap.docs[0].ref;
+    if (!songDocRef && songTitle) {
+      let query = db.collection('users').doc(uid).collection('songLibrary')
+        .where('title', '==', songTitle);
+      if (songArtist) query = query.where('artist', '==', songArtist);
+      const songSnap = await query.limit(1).get();
+      if (!songSnap.empty) {
+        songDocRef = songSnap.docs[0].ref;
+        console.log(`[generateMaterial] song found by title/artist query`);
+      } else {
+        console.warn(`[generateMaterial] song not found by title="${songTitle}" artist="${songArtist}" uid=${uid}`);
+      }
+    }
+
+    if (songDocRef) {
       const materialsSnap = await songDocRef.collection('practiceMaterials').get();
       existingMaterials = materialsSnap.docs.map(d => ({ ref: d.ref, ...d.data() }));
+      console.log(`[generateMaterial] existing materials count=${existingMaterials.length}`);
     }
   } catch (e) {
     console.error('generateMaterial: failed to fetch song/materials:', e);
   }
 
   if (!songDocRef) {
+    console.warn(`[generateMaterial] aborting — could not find song document`);
     return {
       status: "ok",
-      note: "generateMaterial is not implemented yet (dummy was called). Tell the user their new practice material is being prepared.",
+      note: "I couldn't find this song in your library. Try adding it first.",
     };
   }
 
@@ -260,8 +286,10 @@ or
     }
 
     if (!suggestion.canFind || existingTitlesLower.has((suggestion.title || '').toLowerCase().trim())) {
+      console.warn(`[generateMaterial] aborting — canFind=${suggestion.canFind} titleDuplicate=${existingTitlesLower.has((suggestion.title || '').toLowerCase().trim())} suggestedTitle="${suggestion.title}"`);
       return { status: "ok", note: "sorry I really can't find new materials" };
     }
+    console.log(`[generateMaterial] Gemini suggests title="${suggestion.title}" type="${suggestion.type}"`);
 
     const materialData = {
       type: suggestion.type || preferredType,
@@ -276,8 +304,10 @@ or
       const urlRules = suggestion.mergedRules || args.materialRules || storedMaterialRules || '';
       const videoUrl = await getRealYouTubeVideo(songTitle, songArtist || '', existingUrls, urlRules);
       if (!videoUrl) {
+        console.warn(`[generateMaterial] aborting — YouTube scraper returned no new URL (all exhausted)`);
         return { status: "ok", note: "sorry I really can't find new materials" };
       }
+      console.log(`[generateMaterial] YouTube URL found: ${videoUrl}`);
       materialData.videoUrl = videoUrl;
     }
 
@@ -288,6 +318,7 @@ or
     const newMatRef = songDocRef.collection('practiceMaterials').doc();
     batch.set(newMatRef, materialData);
     await batch.commit();
+    console.log(`[generateMaterial] ✅ batch committed — new material "${suggestion.title}" written to Firestore`);
     return { status: "ok", materialAdded: true, title: suggestion.title };
   } catch (e) {
     console.error('generateMaterial: Gemini suggestion failed:', e);
@@ -442,6 +473,7 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
   const fromScreen = request.data.fromScreen || 'home';
   const activeSongTitle = request.data.activeSongTitle || null;
   const activeSongArtist = request.data.activeSongArtist || null;
+  const activeSongId = request.data.activeSongId || null;
   const uid = request.auth ? request.auth.uid : "test_user_123";
 
   if (!message) throw new Error("Message cannot be empty");
@@ -572,7 +604,7 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
           const skill = coachSkills[call.name];
           skillsCalled.push(call.name);
           const response = skill
-            ? await skill(call.args || {}, uid, { fromScreen, activeSongTitle, activeSongArtist })
+            ? await skill(call.args || {}, uid, { fromScreen, activeSongTitle, activeSongArtist, activeSongId })
             : { status: "error", note: `Unknown skill: ${call.name}` };
           return { functionResponse: { name: call.name, response } };
         }));

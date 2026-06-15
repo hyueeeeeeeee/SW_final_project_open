@@ -90,6 +90,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
   String _prevScreen = 'home';
   String? _aiSongTitle;
   String? _aiSongArtist;
+  String? _aiSongId;
   Offset _fabPos = const Offset(20, 84);
   List<ChatMessage> _aiMessages = List.of(AIChatScreen.initialMessages);
   final List<ChatSession> _aiHistory = [];
@@ -214,6 +215,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
       _prevScreen = _screen;
       _aiSongTitle = hasSong ? props['title'] as String? : null;
       _aiSongArtist = hasSong ? props['artist'] as String? : null;
+      _aiSongId = _screen == 'practicing' ? props['songId'] as String? : null;
       _activePracticingChatKey = practicingChatKey;
       if (practicingChatKey != null) {
         _aiMessages = List.of(
@@ -226,10 +228,23 @@ class _FretwiseShellState extends State<FretwiseShell> {
 
   void _closeAI() {
     _saveActivePracticingChat();
+    // Re-fetch practice material in case AI wrote a new one to Firestore.
+    if (_prevScreen == 'practicing') {
+      final props = _screenProps ?? {};
+      final songId = props['songId'] as String? ?? '';
+      if (songId.isNotEmpty) {
+        context.read<AiMaterialService>().generateMaterial(
+          songId: songId,
+          song: props['title'] as String? ?? '',
+          artist: props['artist'] as String? ?? '',
+        );
+      }
+    }
     setState(() {
       _showAI = false;
       _aiSongTitle = null;
       _aiSongArtist = null;
+      _aiSongId = null;
     });
   }
 
@@ -377,6 +392,7 @@ class _FretwiseShellState extends State<FretwiseShell> {
                           onOpenHistory: _openAIHistory,
                           activeSongTitle: _aiSongTitle,
                           activeSongArtist: _aiSongArtist,
+                          activeSongId: _aiSongId,
                         ),
                     ],
                   ),

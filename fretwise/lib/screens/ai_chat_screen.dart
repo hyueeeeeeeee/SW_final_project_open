@@ -32,6 +32,7 @@ class AIChatScreen extends StatefulWidget {
   final ValueChanged<ChatSession> onOpenHistory;
   final String? activeSongTitle;
   final String? activeSongArtist;
+  final String? activeSongId;
 
   const AIChatScreen({
     super.key,
@@ -44,6 +45,7 @@ class AIChatScreen extends StatefulWidget {
     required this.onOpenHistory,
     this.activeSongTitle,
     this.activeSongArtist,
+    this.activeSongId,
   });
 
   static const initialMessages = <ChatMessage>[
@@ -114,6 +116,8 @@ class _AIChatScreenState extends State<AIChatScreen> {
               'activeSongTitle': widget.activeSongTitle,
             if (widget.activeSongArtist != null)
               'activeSongArtist': widget.activeSongArtist,
+            if (widget.activeSongId != null)
+              'activeSongId': widget.activeSongId,
           });
 
       if (!mounted) return;
