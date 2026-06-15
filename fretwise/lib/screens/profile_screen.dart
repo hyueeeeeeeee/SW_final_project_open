@@ -96,7 +96,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .collection('users')
         .doc(uid)
         .collection('sessions')
-        .orderBy('createdAt', descending: true)
         .snapshots();
   }
 
@@ -318,7 +317,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             );
                           }
 
-                          final docs = snapshot.data?.docs ?? [];
+                          var docs = snapshot.data?.docs.toList() ?? [];
+                          docs.sort((a, b) {
+                            final dataA = a.data();
+                            final dataB = b.data();
+                            final timeA = (dataA['createdAt'] as Timestamp?)?.toDate() ?? DateTime.tryParse(dataA['practiceDate'] ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+                            final timeB = (dataB['createdAt'] as Timestamp?)?.toDate() ?? DateTime.tryParse(dataB['practiceDate'] ?? '') ?? DateTime.fromMillisecondsSinceEpoch(0);
+                            return timeB.compareTo(timeA);
+                          });
+
                           if (docs.isEmpty) {
                             if (widget.diaryEntries.isNotEmpty) {
                               return Column(

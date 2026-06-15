@@ -137,11 +137,46 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
       }
     } catch (e) {
       print('recordSession error: $e');
+      // FALLBACK: If Cloud Function fails (e.g. offline, not deployed), save directly to Firestore!
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
+      try {
+        final dummyAiResponse = {
+          'sessionInfo': {
+            'aiComment': 'Great effort today! (Note: the AI backend is currently unreachable, but your practice was safely saved.)',
+            'nextFocus': ['Keep practicing consistently.', 'Focus on your problem areas.'],
+          },
+          'userProfilePatch': {},
+          'songProfilePatch': {}
+        };
+        
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('sessions')
+            .add({
+          'title': widget.title,
+          'artist': widget.artist,
+          'practiceDate': DateTime.now().toIso8601String().split('T')[0],
+          'durationSec': widget.duration,
+          'userNote': _feedbackCtrl.text.trim(),
+          'recordingUrls': widget.recordingUrls,
+          'createdAt': FieldValue.serverTimestamp(),
+          'sessionInfo': dummyAiResponse['sessionInfo']
+        });
+        
+        setState(() {
+          _aiResponse = dummyAiResponse;
+          _showAiModal = true;
+        });
+        print('recordSession fallback success');
+      } catch (fallbackErr) {
+        print('recordSession fallback error: $fallbackErr');
+      }
     }
 
     setState(() => _isSaving = false);
 
-    // If the AI modal didn't open (Firebase error), go home directly
+    // If the AI modal didn't open (Firebase error AND fallback error), go home directly
     if (!_showAiModal) {
       widget.navigate(_targetDestination);
     }

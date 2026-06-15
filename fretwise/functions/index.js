@@ -454,28 +454,28 @@ exports.recordSession = onCall({ cors: true, invoker: 'public', secrets: ['GEMIN
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
       const prompt = `You are an expert guitar practice coach (AI Coach).
-Student practiced "${song.title || 'Unknown'}" by "${song.artist || 'Unknown'}".
-Session duration: ${durationMin} minutes.
-Student's feedback/note: "${userNote}".
+      Student practiced "${song.title || 'Unknown'}" by "${song.artist || 'Unknown'}".
+      Session duration: ${durationMin} minutes.
+      Student's feedback/note: "${userNote}".
 
-Chat log during session:
-${chatHistoryText}
+      Chat log during session:
+      ${chatHistoryText}
 
-Analyze the chat log and student's note to find their specific pain points. 
-Provide a highly personalized coaching summary (aiComment) in 2-3 sentences, list exactly 2 concise next-focus tips (nextFocus).
-Also suggest conservative updates to the user profile (userProfilePatch) and song profile (songProfilePatch).
+      Analyze the chat log and student's note to find their specific pain points. 
+      Provide a highly personalized coaching summary (aiComment) in 2-3 sentences.
+      List exactly 2 concise next-focus tips (nextFocus).
+      Also suggest conservative updates to the user profile (userProfilePatch) and song profile (songProfilePatch).
 
-IMPORTANT: Use pure English only. DO NOT use any emojis, Chinese, or non-ASCII characters in your response.
-
-Return ONLY a valid JSON object matching this structure:
-{
-  "sessionInfo": {
-    "aiComment": "your personalized feedback text",
-    "nextFocus": ["tip1", "tip2"]
-  },
-  "userProfilePatch": { "weakTechniques": ["..."] },
-  "songProfilePatch": { "problemAreas": ["..."], "recommendedFocus": ["..."] }
-}`;
+      IMPORTANT: You can reply in Traditional Chinese if the student used Chinese, or English if they used English. 
+      Return ONLY a valid, parseable JSON object matching this structure:
+      {
+        "sessionInfo": {
+          "aiComment": "your personalized feedback text",
+          "nextFocus": ["tip1", "tip2"]
+        },
+        "userProfilePatch": { "weakTechniques": ["..."] },
+        "songProfilePatch": { "problemAreas": ["..."], "recommendedFocus": ["..."] }
+      }`;
 
       const result = await model.generateContent(prompt);
       let cleanText = (typeof result.response?.text === 'function') ? result.response.text() : "{}";
@@ -512,8 +512,12 @@ Return ONLY a valid JSON object matching this structure:
   return {
     status: "success",
     sessionInfo: { aiComment, nextFocus },
-    userProfilePatch,
-    songProfilePatch
+    userProfilePatch: userProfilePatch || {},
+    songProfilePatch: songProfilePatch || {},
+    song: {
+      title: song.title || 'Unknown',
+      artist: song.artist || 'Unknown'
+    }
   };
 });
 
