@@ -1,4 +1,13 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "practiceTasks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "dayId", "order": "ASCENDING" },
+        { "fieldPath": "orderIndex", "order": "ASCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

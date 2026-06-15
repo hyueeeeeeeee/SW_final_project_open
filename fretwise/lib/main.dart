@@ -19,6 +19,9 @@ import 'screens/practicing_screen.dart';
 import 'screens/session_complete_screen.dart';
 import 'screens/inspiration_screen.dart';
 import 'screens/ai_chat_screen.dart';
+import 'screens/check_in_screen.dart';
+import 'screens/motivation_screen.dart';
+import 'utils/notification_manager.dart';
 
 // 👇 將原本的 main() 替換成這個非同步版本
 void main() async {
@@ -74,7 +77,7 @@ class FretwiseApp extends StatelessWidget {
   }
 }
 
-const _overlayScreens = {'practicing', 'sessionComplete', 'inspiration'};
+const _overlayScreens = {'practicing', 'sessionComplete', 'inspiration', 'check_in', 'motivation'};
 
 class FretwiseShell extends StatefulWidget {
   const FretwiseShell({super.key});
@@ -101,6 +104,19 @@ class _FretwiseShellState extends State<FretwiseShell> {
   void initState() {
     super.initState();
     _loadChatHistory();
+    
+    // Initialize NotificationManager
+    NotificationManager().init();
+    NotificationManager().onNotificationTapped = (payload) {
+      if (mounted) {
+        // When notification is tapped, navigate to the check_in screen
+        setState(() {
+          _screen = 'check_in';
+          _screenProps = payload;
+          _showAI = false;
+        });
+      }
+    };
   }
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
@@ -480,6 +496,20 @@ class _FretwiseShellState extends State<FretwiseShell> {
           diaryEntries: state.diaryEntries,
         );
 
+      case 'check_in':
+        return CheckInScreen(
+          t: t,
+          navigate: _navigate,
+          props: props,
+        );
+
+      case 'motivation':
+        return MotivationScreen(
+          t: t,
+          navigate: _navigate,
+          props: props,
+        );
+
       case 'practicing':
         final aiService = context.watch<AiMaterialService>();
 
@@ -491,6 +521,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
           bpm: props['bpm'] as int? ?? 87,
           videoUrl: props['videoUrl'] as String?,
           songId: props['songId'] as String? ?? '',
+          taskId: props['taskId'] as String?,
+          dayId: props['dayId'] as String?,
           onOpenAI: _openAI,
           practiceMaterial: aiService.currentMaterial,
         );
@@ -506,13 +538,16 @@ class _FretwiseShellState extends State<FretwiseShell> {
         return SessionCompleteScreen(
           t: t,
           navigate: _navigate,
-          title: props['title'] as String? ?? 'Wonderwall',
-          artist: props['artist'] as String? ?? 'Oasis',
+          title: props['title'] as String? ?? 'Unknown',
+          artist: props['artist'] as String? ?? 'Unknown',
           duration: props['duration'] as int? ?? 0,
           recordingUrls: props['recordingUrls'] != null
               ? List<String>.from(props['recordingUrls'] as List)
               : [],
           chatHistory: sessionChat.map((m) => {'role': m.role, 'text': m.text}).toList(),
+          songId: props['songId'] as String?,
+          taskId: props['taskId'] as String?,
+          dayId: props['dayId'] as String?,
           onOpenAI: _openAI,
           onSaveNote: (note) => context.read<AppState>().updateLatestDiaryNote(note),
         );

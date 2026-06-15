@@ -6,7 +6,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../theme.dart';
 import 'song.dart';
 
-
 class DiaryEntry {
   final DateTime date;
   final String title;
@@ -14,18 +13,24 @@ class DiaryEntry {
   final int duration; // seconds
   final String userNote;
 
-  DiaryEntry({required this.date, required this.title, required this.artist, required this.duration, this.userNote = ''});
+  DiaryEntry({
+    required this.date,
+    required this.title,
+    required this.artist,
+    required this.duration,
+    this.userNote = '',
+  });
 }
 // =====================================================================
 
 class AppState extends ChangeNotifier {
   bool _darkMode = false;
   bool _isLoadingAddSong = false;
-  
+
   // 保留給商城、Profile 的舊狀態
-  int _coins = 340; 
+  int _coins = 340;
   Set<String> _ownedItems = {'streak_shield_1'};
-  final List<DiaryEntry> _diaryEntries = []; 
+  final List<DiaryEntry> _diaryEntries = [];
 
   bool get darkMode => _darkMode;
   Color get accent => AppColors.accent;
@@ -46,33 +51,40 @@ class AppState extends ChangeNotifier {
     _coins -= amount;
     notifyListeners();
   }
-  
+
   void addOwnedItem(String id) {
     _ownedItems = {..._ownedItems, id};
     notifyListeners();
   }
-  
+
   void addDiaryEntry(DiaryEntry entry) {
     _diaryEntries.insert(0, entry);
     notifyListeners();
   }
-  
+
   void updateLatestDiaryNote(String note) {
     if (_diaryEntries.isNotEmpty) {
       final e = _diaryEntries[0];
-      _diaryEntries[0] = DiaryEntry(date: e.date, title: e.title, artist: e.artist, duration: e.duration, userNote: note);
+      _diaryEntries[0] = DiaryEntry(
+        date: e.date,
+        title: e.title,
+        artist: e.artist,
+        duration: e.duration,
+        userNote: note,
+      );
       notifyListeners();
     }
   }
 
   //ccc
-   String? _highlightedSongId;
-    String? get highlightedSongId => _highlightedSongId;
+  String? _highlightedSongId;
+  String? get highlightedSongId => _highlightedSongId;
 
-    void setHighlightedSong(String? id) {
-      _highlightedSongId = id;
-      notifyListeners();
-    }
+  void setHighlightedSong(String? id) {
+    _highlightedSongId = id;
+    notifyListeners();
+  }
+
   Future<String?> findExistingSongId(String title, String artist) async {
     final uid = currentUserId;
     final query = await FirebaseFirestore.instance
@@ -90,9 +102,8 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  
-  
-  String get currentUserId => FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
+  String get currentUserId =>
+      FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
 
   // 監聽 Library 歌單
   Stream<List<SongEntry>> get libraryStream {
@@ -101,7 +112,9 @@ class AppState extends ChangeNotifier {
         .doc(currentUserId)
         .collection('songLibrary')
         .snapshots()
-        .map((snap) => snap.docs.map((d) => SongEntry.fromFirestore(d)).toList());
+        .map(
+          (snap) => snap.docs.map((d) => SongEntry.fromFirestore(d)).toList(),
+        );
   }
 
   // 監聽 Inspiration Feed 短影音
@@ -112,10 +125,19 @@ class AppState extends ChangeNotifier {
         .collection('feed')
         .orderBy('createdAt', descending: false)
         .snapshots()
-        .map((snap) => snap.docs.map((d) => FeedItem.fromFirestore(d)).toList());
+        .map(
+          (snap) => snap.docs.map((d) => FeedItem.fromFirestore(d)).toList(),
+        );
   }
 
 // 💡 修改：如果是新歌才回傳 SongEntry，重複則回傳 null
+  // Library Page: 呼叫 AI 搜尋歌曲資訊
+  // ... 前面的 import 不變
+
+  // Library Page: 呼叫 AI 搜尋歌曲資訊
+  // ... 其他部分不變
+
+  // Library Page: 呼叫 AI 搜尋歌曲資訊
   Future<SongEntry?> searchSongToLibrary(String title, String artist) async {
     _isLoadingAddSong = true;
     notifyListeners();
@@ -155,17 +177,23 @@ class AppState extends ChangeNotifier {
   }
 
   // 2. 修正按讚取消邏輯
-  Future<void> setFeedItemAction(String feedItemId, String currentAction, String newAction) async {
+  Future<void> setFeedItemAction(
+    String feedItemId,
+    String currentAction,
+    String newAction,
+  ) async {
     // 如果點擊的跟原本的一樣，就取消 (變回 ignored)
     final finalAction = (currentAction == newAction) ? 'ignored' : newAction;
-    
+
     await FirebaseFirestore.instance
-        .collection('users').doc(currentUserId)
-        .collection('feed').doc(feedItemId)
+        .collection('users')
+        .doc(currentUserId)
+        .collection('feed')
+        .doc(feedItemId)
         .update({'actionState': finalAction});
   }
 
- // 💡 新增一把鎖：用來防止使用者狂滑導致重複呼叫
+  // 💡 新增一把鎖：用來防止使用者狂滑導致重複呼叫
   bool _isGeneratingFeed = false;
   bool get isGeneratingFeed => _isGeneratingFeed;
 
@@ -173,7 +201,7 @@ class AppState extends ChangeNotifier {
   Future<void> updateFeed() async {
     // 💡 防呆機制：如果 AI 已經在努力想歌了，就直接擋掉後續的呼叫！
     if (_isGeneratingFeed) {
-      return; 
+      return;
     }
 
     _isGeneratingFeed = true;
@@ -191,8 +219,12 @@ class AppState extends ChangeNotifier {
       notifyListeners();
     }
   }
+
   // --- Library Page: 封存、最愛狀態切換 ---
-  Future<void> updateSongStatus(String songId, Map<String, dynamic> data) async {
+  Future<void> updateSongStatus(
+    String songId,
+    Map<String, dynamic> data,
+  ) async {
     try {
       await FirebaseFirestore.instance
           .collection('users')

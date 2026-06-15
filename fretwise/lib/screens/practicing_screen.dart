@@ -26,6 +26,8 @@ class PracticingScreen extends StatefulWidget {
   final String? videoUrl;
 
   final String songId;
+  final String? taskId;
+  final String? dayId;
   final Map<String, dynamic>? practiceMaterial;
 
   const PracticingScreen({
@@ -36,6 +38,8 @@ class PracticingScreen extends StatefulWidget {
     required this.artist,
     required this.bpm,
     required this.songId,
+    this.taskId,
+    this.dayId,
     required this.onOpenAI,
     this.videoUrl,
     this.practiceMaterial,
@@ -71,6 +75,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
 
   // Tuner — real microphone pitch detection
   StreamSubscription<Uint8List>? _micSub;
+  final AudioRecorder _record = AudioRecorder();
   late final PitchDetector _pitchDetector;
   final List<int> _rawBuffer = [];
   double _tunerFreq = 0;
@@ -132,6 +137,7 @@ class _PracticingScreenState extends State<PracticingScreen> {
     _micSub?.cancel();
     _metroAudio?.release();
     _ytController?.close();
+    _record.dispose();
     super.dispose();
   }
 
@@ -306,16 +312,14 @@ class _PracticingScreenState extends State<PracticingScreen> {
       _tunerNote = '--';
     });
     try {
-      // MicStream.microphone returns a Stream<Uint8List> directly.
-      final stream = await _recorder.startStream(
-      const RecordConfig(
-        encoder: AudioEncoder.pcm16bits, // 轉成相同的 PCM 16bit 格式
-        sampleRate: 44100,
-        numChannels: 1,
-      ),
-    );
-      
-      _micSub = stream.listen(
+      if (await _record.hasPermission()) {
+        final stream = await _record.startStream(const RecordConfig(
+          encoder: AudioEncoder.pcm16bits,
+          sampleRate: 44100,
+          numChannels: 1,
+        ));
+        
+        _micSub = stream.listen(
         (chunk) {
           _rawBuffer.addAll(chunk);
           // Cap to ~0.5 s of audio (44100 Hz × 2 bytes/sample = 88200 bytes)
@@ -335,7 +339,10 @@ class _PracticingScreenState extends State<PracticingScreen> {
           debugPrint('Tuner stream error: $e');
           if (mounted) setState(() => _tunerPermDenied = true);
         },
-      );
+        );
+      } else {
+        if (mounted) setState(() => _tunerPermDenied = true);
+      }
     } catch (e) {
       debugPrint('Tuner mic error: $e');
       if (mounted) setState(() => _tunerPermDenied = true);
@@ -386,9 +393,10 @@ class _PracticingScreenState extends State<PracticingScreen> {
     return (names[noteIdx], octave, cents);
   }
 
-  void _stopTuner() {
+  void _stopTuner() async {
     _micSub?.cancel();
     _micSub = null;
+    await _record.stop();
     _rawBuffer.clear();
     if (mounted) setState(() { _tunerPitched = false; _tunerNote = '--'; });
   }
@@ -618,6 +626,8 @@ class _PracticingScreenState extends State<PracticingScreen> {
                           'artist': widget.artist,
                           'duration': _seconds,
                           'recordingUrls': _uploadedRecordingUrls,
+                          'taskId': widget.taskId,
+                          'dayId': widget.dayId,
                         });
                       },
                       style: OutlinedButton.styleFrom(

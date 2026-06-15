@@ -12,6 +12,9 @@ class SessionCompleteScreen extends StatefulWidget {
   final String artist;
   final int duration;
   final List<String> recordingUrls;
+  final String? songId;
+  final String? taskId;
+  final String? dayId;
   final VoidCallback onOpenAI;
   final void Function(String note)? onSaveNote;
   final List<Map<String, String>> chatHistory;
@@ -24,6 +27,9 @@ class SessionCompleteScreen extends StatefulWidget {
     required this.artist,
     required this.duration,
     required this.recordingUrls,
+    this.songId,
+    this.taskId,
+    this.dayId,
     required this.onOpenAI,
     this.onSaveNote,
     required this.chatHistory,
@@ -45,7 +51,41 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
   bool _isSaving = false;
   String _targetDestination = 'home';
 
+  Map<String, dynamic>? _nextTask;
+
   AppTheme get t => widget.t;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.dayId != null) {
+      _fetchNextTask();
+    }
+  }
+
+  Future<void> _fetchNextTask() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('practiceTasks')
+        .where('dayId', isEqualTo: widget.dayId)
+        .where('status', isEqualTo: 'planned')
+        .orderBy('orderIndex')
+        .get();
+
+    for (var doc in snap.docs) {
+      if (doc.id != widget.taskId) {
+        setState(() {
+          _nextTask = doc.data();
+          _nextTask!['id'] = doc.id;
+        });
+        break;
+      }
+    }
+  }
 
   String _fmt(int s) =>
       '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
@@ -69,10 +109,20 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
     widget.onSaveNote?.call(_feedbackCtrl.text.trim());
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null && widget.taskId != null) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .collection('practiceTasks')
+            .doc(widget.taskId)
+            .update({'status': 'completed'});
+      }
+
       final callable = FirebaseFunctions.instance.httpsCallable(
         'recordSession',
       );
-      
+
       // 整合練習中的 AI 對話歷史
       final allChatHistory = [...widget.chatHistory];
       if (_feedbackCtrl.text.trim().isNotEmpty) {
@@ -81,7 +131,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
           'text': 'Session feedback: ${_feedbackCtrl.text.trim()}',
         });
       }
-      
+
       final payload = {
         'song': {
           'title': widget.title,
@@ -90,6 +140,8 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
           'defaultSectionLabel': null,
           'deadlineDate': _deadlineDate.isEmpty ? null : _deadlineDate,
         },
+        'songProfile': null,
+        'profile': null,
         'userThoughts': {
           'practiceDate': DateTime.now().toIso8601String().split('T')[0],
           'durationSec': widget.duration,
@@ -142,28 +194,32 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
       try {
         final dummyAiResponse = {
           'sessionInfo': {
-            'aiComment': 'Great effort today! (Note: the AI backend is currently unreachable, but your practice was safely saved.)',
-            'nextFocus': ['Keep practicing consistently.', 'Focus on your problem areas.'],
+            'aiComment':
+                'Great effort today! (Note: the AI backend is currently unreachable, but your practice was safely saved.)',
+            'nextFocus': [
+              'Keep practicing consistently.',
+              'Focus on your problem areas.',
+            ],
           },
           'userProfilePatch': {},
-          'songProfilePatch': {}
+          'songProfilePatch': {},
         };
-        
+
         await FirebaseFirestore.instance
             .collection('users')
             .doc(uid)
             .collection('sessions')
             .add({
-          'title': widget.title,
-          'artist': widget.artist,
-          'practiceDate': DateTime.now().toIso8601String().split('T')[0],
-          'durationSec': widget.duration,
-          'userNote': _feedbackCtrl.text.trim(),
-          'recordingUrls': widget.recordingUrls,
-          'createdAt': FieldValue.serverTimestamp(),
-          'sessionInfo': dummyAiResponse['sessionInfo']
-        });
-        
+              'title': widget.title,
+              'artist': widget.artist,
+              'practiceDate': DateTime.now().toIso8601String().split('T')[0],
+              'durationSec': widget.duration,
+              'userNote': _feedbackCtrl.text.trim(),
+              'recordingUrls': widget.recordingUrls,
+              'createdAt': FieldValue.serverTimestamp(),
+              'sessionInfo': dummyAiResponse['sessionInfo'],
+            });
+
         setState(() {
           _aiResponse = dummyAiResponse;
           _showAiModal = true;
@@ -178,6 +234,24 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
     // If the AI modal didn't open (Firebase error AND fallback error), go home directly
     if (!_showAiModal) {
+      widget.navigate(_targetDestination);
+    }
+  }
+
+  void _navigateAfterApplyingSuggestions() {
+    if (_nextTask != null) {
+      widget.navigate(
+        'practicing',
+        props: {
+          'title': _nextTask!['songTitle'] ?? _nextTask!['title'],
+          'artist': _nextTask!['artist'],
+          'bpm': _nextTask!['bpm'],
+          'songId': _nextTask!['songId'],
+          'taskId': _nextTask!['id'],
+          'dayId': _nextTask!['dayId'],
+        },
+      );
+    } else {
       widget.navigate(_targetDestination);
     }
   }
@@ -513,7 +587,9 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: _isSaving ? null : () => _handleSaveAndNavigate('home'),
+                        onPressed: _isSaving
+                            ? null
+                            : () => _handleSaveAndNavigate('home'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: t.accent,
                           padding: const EdgeInsets.symmetric(vertical: 15),
@@ -523,7 +599,14 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                           elevation: 0,
                         ),
                         child: _isSaving && _targetDestination == 'home'
-                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                ),
+                              )
                             : const Text(
                                 'Back to Home',
                                 style: TextStyle(
@@ -538,7 +621,9 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: _isSaving ? null : () => _handleSaveAndNavigate('library'),
+                        onPressed: _isSaving
+                            ? null
+                            : () => _handleSaveAndNavigate('library'),
                         style: OutlinedButton.styleFrom(
                           side: BorderSide(color: t.border, width: 1.5),
                           padding: const EdgeInsets.symmetric(vertical: 15),
@@ -547,7 +632,14 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                           ),
                         ),
                         child: _isSaving && _targetDestination == 'library'
-                            ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: t.accent, strokeWidth: 2))
+                            ? SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  color: t.accent,
+                                  strokeWidth: 2,
+                                ),
+                              )
                             : Text(
                                 'Go to my Library',
                                 style: TextStyle(
@@ -838,7 +930,10 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             });
                             widget.navigate(_targetDestination);
                           },
-                          child: Text('Skip', style: TextStyle(color: t.text)),
+                          child: Text(
+                            _nextTask != null ? 'Go Home' : 'Skip',
+                            style: TextStyle(color: t.text),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
@@ -847,9 +942,13 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                               : () async {
                                   setState(() => _applyingPatch = true);
                                   try {
-                                    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
-                                    final callable = FirebaseFunctions
-                                        .instance
+                                    final uid =
+                                        FirebaseAuth
+                                            .instance
+                                            .currentUser
+                                            ?.uid ??
+                                        'test_user_123';
+                                    final callable = FirebaseFunctions.instance
                                         .httpsCallable('applyPatch');
                                     final payload = {
                                       'uid': uid,
@@ -871,7 +970,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                                   }
                                   setState(() => _applyingPatch = false);
                                   setState(() => _showAiModal = false);
-                                  widget.navigate(_targetDestination);
+                                  _navigateAfterApplyingSuggestions();
                                 },
                           child: _applyingPatch
                               ? const SizedBox(
@@ -881,7 +980,11 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Apply Suggestions'),
+                              : Text(
+                                  _nextTask != null
+                                      ? 'Apply & Next Task'
+                                      : 'Apply Suggestions',
+                                ),
                         ),
                       ],
                     ),

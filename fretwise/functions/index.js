@@ -1,6 +1,8 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { setGlobalOptions } = require("firebase-functions/v2/options");
+const logger = require("firebase-functions/logger");
+const { VertexAI } = require("@google-cloud/vertexai");
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 const { GoogleGenerativeAI, SchemaType } = require("@google/generative-ai");
 
 admin.initializeApp();
@@ -379,7 +381,7 @@ async function updatePlanSkill(args, uid) {
 
   return {
     status: "ok",
-    note: "updatePlan is not implemented yet (dummy was called). Tell the user their practice plan is being updated.",
+    note: "generateMaterial is not implemented yet (dummy was called). Tell the user their new practice material is being prepared.",
   };
 }
 
@@ -388,7 +390,355 @@ exports.generateMaterial = onCall({ cors: true, invoker: "public" }, async (requ
   return generateMaterialSkill(request.data, uid);
 });
 
-exports.updatePlan = onCall({ cors: true, invoker: "public" }, async (request) => {
+const AGENT_SYSTEM_PROMPT = `You are a guitar practice scheduling AI agent for the Fretwise app.
+
+Given the user's external calendar events (next 7 days), learning preferences, song library, and current practice plan, produce a new or updated practice schedule.
+
+RULES:
+- Avoid conflicts with existing calendar events
+- Reduce practice on busy days, increase practice on free days
+- Respect the user's preferred session length and practice times
+- Prioritize songs with upcoming deadlines
+- Never schedule practice during existing calendar events
+
+BUSYNESS CLASSIFICATION:
+| Total Event Hours | Busyness Level | Max Practice Minutes |
+|---|---|---|
+| 0 hours | free | preferredSessionMinutes × 1.5 (round to nearest 5) |
+| 0.1 – 2 hours | light | preferredSessionMinutes |
+| 2.1 – 5 hours | moderate | preferredSessionMinutes × 0.7 (round to nearest 5) |
+| 5.1 – 8 hours | busy | preferredSessionMinutes × 0.4 (min 10) |
+| 8+ hours | packed | 0 (rest day) |
+
+If preferredSessionMinutes is not set, default to 20 minutes.
+
+SONG SELECTION PRIORITY:
+1. Songs with deadlineDate within 14 days get highest priority
+2. Songs with lower progressPercent get more practice time
+3. isFavorite songs get slight priority boost
+4. Rotate through 2-3 songs per week for variety
+
+TASK DESIGN:
+- CRITICAL: Generate EXACTLY ONE task in the \`practiceTasks\` array for each day. The length of \`practiceTasks\` MUST equal the number of active practice days.
+- If you want the user to do a warm-up or practice multiple songs, COMBINE them into a single task. Put all instructions in the single task's \`instructions\` field. Do NOT create separate "Warm-up" tasks.
+- Each task should have a clear, specific title (e.g., "Warm-up & Love Story Practice")
+- Include practical instructions the user can follow
+- Build on the user's weakTechniques
+- Progress logically across the week
+- Progress logically across the week
+
+Return ONLY valid JSON, no markdown, no prose outside JSON.
+
+OUTPUT FORMAT:
+{
+  "practicePlan": {
+    "title": "string",
+    "summary": "string",
+    "activeFromDate": "YYYY-MM-DD",
+    "activeToDate": "YYYY-MM-DD",
+    "linkedSongIds": ["string"],
+    "generatedReason": "string"
+  },
+  "practiceDays": [
+    {
+      "date": "YYYY-MM-DD",
+      "status": "planned | rest",
+      "plannedMinutes": number,
+      "linkedSongIds": ["string"],
+      "busynessLevel": "free | light | moderate | busy | packed",
+      "busynessReason": "string"
+    }
+  ],
+  "practiceTasks": [
+    {
+      "dayId": "YYYY-MM-DD",
+      "songId": "string",
+      "title": "string",
+      "instructions": "string",
+      "minutes": number,
+      "orderIndex": number
+    }
+  ]
+}`;
+
+// ─── Helper: compute today's date string ──────────────────────────────────
+
+function getTodayStr() {
+  const now = new Date();
+  // Use Asia/Taipei timezone
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(now); // returns YYYY-MM-DD
+}
+
+// ─── Helper: generate a plan ID ───────────────────────────────────────────
+function generatePlanId() {
+  const today = getTodayStr().replace(/-/g, "");
+  return `plan_${today}_${Date.now().toString(36)}`;
+}
+
+// ─── updatePlan Cloud Function ────────────────────────────────────────────
+
+async function updatePlanSkill(args, uid) {
+// uid is passed as argument
+    const externalCalendar = args.externalCalendar || [];
+    const db = admin.firestore();
+
+    logger.info(`updatePlan called by user ${uid}`, {
+      eventCount: externalCalendar.length,
+    });
+
+    let text;
+  try {
+      // 2. Read user data from Firestore
+      const userDoc = await db.collection("users").doc(uid).get();
+      const userData = userDoc.exists ? userDoc.data() : {};
+
+      const profile = userData.profile || {
+        skillLevel: "beginner",
+        preferredSessionMinutes: 20,
+      };
+      const preferences = userData.preferences || {};
+
+      // 3. Read song library (non-archived only)
+      const songLibSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("songLibrary")
+        .where("isArchived", "==", false)
+        .get();
+
+      const songLibrary = songLibSnap.docs.map((doc) => ({
+        songId: doc.id,
+        ...doc.data(),
+      }));
+
+      // 4. Read existing active plan (if any)
+      let existingPlan = null;
+      if (userData.activePlanId) {
+        const planDoc = await db
+          .collection("users")
+          .doc(uid)
+          .collection("practicePlans")
+          .doc(userData.activePlanId)
+          .get();
+        if (planDoc.exists) {
+          existingPlan = { planId: planDoc.id, ...planDoc.data() };
+        }
+      }
+
+      const today = getTodayStr();
+
+      // 5. Build AI input
+      const aiInput = {
+        externalCalendar,
+        profile: {
+          skillLevel: profile.skillLevel || "beginner",
+          experienceSummary: profile.experienceSummary || null,
+          currentGoals: profile.currentGoals || [],
+          weakTechniques: profile.weakTechniques || [],
+          strongTechniques: profile.strongTechniques || [],
+          preferredSessionMinutes: profile.preferredSessionMinutes || 20,
+          preferredDayAndTime: userData.preferredDayAndTime || profile.preferredDayAndTime || null,
+          dayAndTimeRule: userData.DayAndTimeRule || null,
+        },
+        preferences: {
+          favoriteGenres: preferences.favoriteGenres || [],
+          favoriteArtists: preferences.favoriteArtists || [],
+          preferredMaterialTypes: preferences.preferredMaterialTypes || [],
+        },
+        songLibrary: songLibrary.map((s) => ({
+          songId: s.songId,
+          title: s.title || "Unknown",
+          artist: s.artist || "Unknown",
+          bpm: s.bpm || null,
+          progressPercent: s.progressPercent || 0,
+          deadlineDate: s.deadlineDate || null,
+          isFavorite: s.isFavorite || false,
+          isArchived: false,
+        })),
+        existingPlan,
+        today,
+      };
+
+      logger.info("AI input assembled", {
+        songCount: songLibrary.length,
+        hasExistingPlan: !!existingPlan,
+      });
+
+      // 6. Call Gemini AI via GoogleGenerativeAI
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.5-flash",
+        generationConfig: {
+          temperature: 0.3,
+          topP: 0.8,
+          maxOutputTokens: 8192,
+          responseMimeType: "application/json",
+        },
+        systemInstruction: AGENT_SYSTEM_PROMPT,
+      });
+
+      const userPrompt = `Here is the user's data. Generate a 4-week (28-day) practice plan based on this information.
+
+CRITICAL CONSTRAINTS:
+1. DO NOT schedule ANY practice on days that conflict heavily with the 'externalCalendar' events. If a day has many busy events on 'preferredDayAndTime', CANCEL the practice for that day completely (schedule 0 minutes).
+2. STRICTLY follow the 'dayAndTimeRule' string. If the user explicitly asks to skip a certain date (e.g., "skip June 21, 2026"), you MUST NOT schedule any practice on that date (0 minutes).
+3. The generated plan must cover exactly 28 days starting from 'today'.
+4. VERY IMPORTANT: You have a strict output token limit. Keep all text fields (like "instructions" and "summary") EXTREMELY short (1-2 sentences max). Limit the number of tasks per day to at most 2-3 to ensure the entire 28-day JSON plan fits in the response without being truncated.
+5. EXTREMELY IMPORTANT: You MUST ONLY schedule practice sessions on the days of the week specified in 'profile.preferredDayAndTime'. For all other days of the week, you MUST schedule 0 minutes of practice and NO tasks. If 'profile.preferredDayAndTime' is empty or null, schedule normally. But if it has days listed (e.g. "Monday, 8:00 pm"), those are the ONLY days the user can practice.
+6. DO NOT COMPENSATE: If a preferred practice day is blocked by externalCalendar events or dayAndTimeRule, DO NOT attempt to "make up" the missed practice by scheduling on other days. Just skip it entirely. Under NO circumstances should you schedule practice on a non-preferred day.
+7. ALWAYS output valid JSON. If you cannot fit all tasks into the allowed preferred days without violating constraints, DROP the remaining tasks. It is better to have fewer tasks than to schedule on a forbidden day. NEVER output conversational text or apologies.
+
+User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
+
+    // removed extra try
+      logger.info("Calling Gemini AI...");
+      const result = await model.generateContent(userPrompt);
+      const response = result.response;
+      text = response.candidates[0].content.parts[0].text;
+
+      logger.info("Gemini AI response received", {
+        responseLength: text.length,
+      });
+
+      // 7. Parse AI response
+      const cleanJsonStr = text.replace(/```json\n?|```/g, "").trim();
+      let aiOutput;
+      try {
+        aiOutput = JSON.parse(cleanJsonStr);
+      } catch (parseErr) {
+        logger.error("JSON Parse Error. Raw text:", text);
+        throw new Error("AI output was not valid JSON: " + text.substring(0, 500));
+      }
+
+      // 7. Extract items
+      const planObj = aiOutput.practicePlan || {};
+      const daysArr = aiOutput.practiceDays || [];
+      const tasksArr = aiOutput.practiceTasks || [];
+
+      // Validate required fields
+      if (
+        !aiOutput.practicePlan ||
+        !aiOutput.practiceDays ||
+        !aiOutput.practiceTasks
+      ) {
+        logger.error("AI response missing required fields", { aiOutput });
+        throw new HttpsError(
+          "internal",
+          "AI response is incomplete. Please try again."
+        );
+      }
+
+      // 8. Delete old planned tasks to avoid duplicate/stale tasks
+      const oldTasksSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("practiceTasks")
+        .where("status", "==", "planned")
+        .get();
+
+      // 9. Write results to Firestore (batch write)
+      const batch = db.batch();
+
+      oldTasksSnap.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+
+      const planId = generatePlanId();
+      const userRef = db.collection("users").doc(uid);
+
+      // 8a. Write PracticePlan
+      const planRef = userRef.collection("practicePlans").doc(planId);
+      batch.set(planRef, {
+        ...planObj,
+        status: "active",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // 8b. Update user's activePlanId
+      batch.update(userRef, {
+        activePlanId: planId,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // 8c. Write PracticeDays
+      for (const day of daysArr) {
+        if (!day.date) continue;
+        const dayRef = userRef.collection("practiceDays").doc(day.date);
+        batch.set(
+          dayRef,
+          {
+            planId,
+            date: day.date,
+            status: day.status || "planned",
+            plannedMinutes: day.plannedMinutes || 0,
+            linkedSongIds: day.linkedSongIds || [],
+            completedMinutes: 0,
+            completedSessionCount: 0,
+            completedSongIds: [],
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+
+      // 8d. Write PracticeTasks
+      for (let i = 0; i < tasksArr.length; i++) {
+        const task = tasksArr[i];
+        const taskId = `task_${planId}_${i}`;
+        const taskRef = userRef.collection("practiceTasks").doc(taskId);
+        batch.set(taskRef, {
+          planId,
+          dayId: task.dayId,
+          originalDayId: task.dayId,
+          songId: task.songId || null,
+          title: task.title || "Practice",
+          instructions: task.instructions || "",
+          minutes: task.minutes || 15,
+          orderIndex: task.orderIndex || i,
+          status: "planned",
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        // Also add songTitle and artist for frontend display
+        if (task.songId) {
+          const songData = songLibrary.find((s) => s.songId === task.songId);
+          if (songData) {
+            batch.update(taskRef, {
+              songTitle: songData.title,
+              artist: songData.artist,
+              bpm: songData.bpm || null,
+            });
+          }
+        }
+      }
+
+      await batch.commit();
+
+      logger.info("Practice plan written to Firestore", {
+        planId,
+        daysCount: daysArr.length,
+        tasksCount: tasksArr.length,
+      });
+
+      return {
+        success: true,
+        planId,
+        message: `Practice plan "${planObj.title || "Unknown"}" created with ${tasksArr.length} tasks over ${daysArr.length} days.`,
+      };
+    } catch (err) {
+      logger.error("updatePlan failed", { error: err.message, stack: err.stack, responseText: typeof text !== 'undefined' ? text : null });
+      throw new HttpsError("aborted", err.message === "Unexpected end of JSON input" || err instanceof SyntaxError ? "AI returned invalid JSON. End of string: " + (typeof text !== 'undefined' ? text.substring(Math.max(0, text.length - 500)) : 'undefined') : err.message);
+    }
+  
+}
+
+exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"], timeoutSeconds: 300 }, async (request) => {
   const uid = request.auth ? request.auth.uid : "test_user_123";
   return updatePlanSkill(request.data, uid);
 });
