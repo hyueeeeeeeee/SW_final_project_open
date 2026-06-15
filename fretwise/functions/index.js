@@ -1,4 +1,6 @@
-const { onCall } = require("firebase-functions/v2/https");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const logger = require("firebase-functions/logger");
+const { VertexAI } = require("@google-cloud/vertexai");
 const admin = require("firebase-admin");
 const { GoogleGenerativeAI, SchemaType } = require("@google/generative-ai");
 
@@ -188,6 +190,7 @@ function generatePlanId() {
 async function updatePlanSkill(args, uid) {
 // uid is passed as argument
     const externalCalendar = args.externalCalendar || [];
+    const db = admin.firestore();
 
     logger.info(`updatePlan called by user ${uid}`, {
       eventCount: externalCalendar.length,
