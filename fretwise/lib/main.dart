@@ -354,8 +354,20 @@ class _FretwiseShellState extends State<FretwiseShell> {
             Column(
               children: [
                 Expanded(
-                  child: _showAI
-                      ? AIChatScreen(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      // Keep practicing/sessionComplete alive while AI is open
+                      // so the timer and user-typed notes are not reset.
+                      if (_screen == 'practicing' || _screen == 'sessionComplete')
+                        Offstage(
+                          offstage: _showAI,
+                          child: _buildScreen(t, state),
+                        )
+                      else if (!_showAI)
+                        _buildScreen(t, state),
+                      if (_showAI)
+                        AIChatScreen(
                           t: t,
                           fromScreen: _prevScreen,
                           onClose: _closeAI,
@@ -365,8 +377,9 @@ class _FretwiseShellState extends State<FretwiseShell> {
                           onOpenHistory: _openAIHistory,
                           activeSongTitle: _aiSongTitle,
                           activeSongArtist: _aiSongArtist,
-                        )
-                      : _buildScreen(t, state),
+                        ),
+                    ],
+                  ),
                 ),
                 if (_showNav)
                   _BottomNavBar(active: _screen, navigate: _navigate, t: t),
