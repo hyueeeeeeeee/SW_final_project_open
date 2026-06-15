@@ -299,6 +299,7 @@ CRITICAL CONSTRAINTS:
 3. The generated plan must cover exactly 28 days starting from 'today'.
 4. VERY IMPORTANT: You have a strict output token limit. Keep all text fields (like "instructions" and "summary") EXTREMELY short (1-2 sentences max). Limit the number of tasks per day to at most 2-3 to ensure the entire 28-day JSON plan fits in the response without being truncated.
 5. EXTREMELY IMPORTANT: You MUST ONLY schedule practice sessions on the days of the week specified in 'profile.preferredDayAndTime'. For all other days of the week, you MUST schedule 0 minutes of practice and NO tasks. If 'profile.preferredDayAndTime' is empty or null, schedule normally. But if it has days listed (e.g. "Monday, 8:00 pm"), those are the ONLY days the user can practice.
+6. DO NOT COMPENSATE: If a preferred practice day is blocked by externalCalendar events or dayAndTimeRule, DO NOT attempt to "make up" the missed practice by scheduling on other days. Just skip it entirely. Under NO circumstances should you schedule practice on a non-preferred day.
 
 User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
 
