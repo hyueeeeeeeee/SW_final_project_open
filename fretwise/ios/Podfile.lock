@@ -1400,6 +1400,9 @@ PODS:
   - permission_handler_apple (9.4.8):
     - Flutter
   - RecaptchaInterop (101.0.0)
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
   - url_launcher_ios (0.0.1):
     - Flutter
   - webview_flutter_wkwebview (0.0.1):
@@ -1416,6 +1419,7 @@ DEPENDENCIES:
   - Flutter (from `Flutter`)
   - mic_stream (from `.symlinks/plugins/mic_stream/ios`)
   - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
   - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
   - webview_flutter_wkwebview (from `.symlinks/plugins/webview_flutter_wkwebview/darwin`)
 
@@ -1462,6 +1466,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/mic_stream/ios"
   permission_handler_apple:
     :path: ".symlinks/plugins/permission_handler_apple/ios"
+  shared_preferences_foundation:
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
   url_launcher_ios:
     :path: ".symlinks/plugins/url_launcher_ios/ios"
   webview_flutter_wkwebview:
@@ -1473,7 +1479,7 @@ SPEC CHECKSUMS:
   BoringSSL-GRPC: dded2a44897e45f28f08ae87a55ee4bcd19bc508
   cloud_firestore: 0b00f29ae2bb05adf7b0624b4aa883861a59761d
   cloud_functions: 18bff3a9a3a018512bef4b70535f3f5326bc5e24
-  device_calendar: 72a1d465d4ef4c5821ee90a31845cb4f1db4c264
+  device_calendar: b55b2c5406cfba45c95a59f9059156daee1f74ed
   Firebase: 7cc10425300768ec86292688af5cb228f0604bde
   firebase_auth: d4091ec40b52cc2ea56171ea521c30b388844acb
   firebase_core: 383e19b49a08df5d7a6cf5017616de6a357ed7af
@@ -1498,6 +1504,7 @@ SPEC CHECKSUMS:
   nanopb: fad817b59e0457d11a5dfbde799381cd727c1275
   permission_handler_apple: 92d754bbaa7361d436db2d6c3c1c2a0fdcec462e
   RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
+  shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 

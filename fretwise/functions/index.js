@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 const { VertexAI } = require("@google-cloud/vertexai");
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 const { GoogleGenerativeAI, SchemaType } = require("@google/generative-ai");
 
 admin.initializeApp();
@@ -126,9 +127,12 @@ SONG SELECTION PRIORITY:
 4. Rotate through 2-3 songs per week for variety
 
 TASK DESIGN:
-- Each task should have a clear, specific title (not generic)
+- CRITICAL: Generate EXACTLY ONE task in the \`practiceTasks\` array for each day. The length of \`practiceTasks\` MUST equal the number of active practice days.
+- If you want the user to do a warm-up or practice multiple songs, COMBINE them into a single task. Put all instructions in the single task's \`instructions\` field. Do NOT create separate "Warm-up" tasks.
+- Each task should have a clear, specific title (e.g., "Warm-up & Love Story Practice")
 - Include practical instructions the user can follow
 - Build on the user's weakTechniques
+- Progress logically across the week
 - Progress logically across the week
 
 Return ONLY valid JSON, no markdown, no prose outside JSON.
@@ -272,19 +276,14 @@ async function updatePlanSkill(args, uid) {
         hasExistingPlan: !!existingPlan,
       });
 
-      // 6. Call Gemini AI via Vertex AI
-      const projectId = process.env.GCLOUD_PROJECT || "fretwise-6ceb6";
-      const vertexAI = new VertexAI({
-        project: projectId,
-        location: "asia-east1",
-      });
-
-      const model = vertexAI.getGenerativeModel({
-        model: "gemini-2.0-flash",
+      // 6. Call Gemini AI via GoogleGenerativeAI
+      const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.5-flash",
         generationConfig: {
           temperature: 0.3,
           topP: 0.8,
-          maxOutputTokens: 4096,
+          maxOutputTokens: 8192,
           responseMimeType: "application/json",
         },
         systemInstruction: AGENT_SYSTEM_PROMPT,
@@ -326,8 +325,21 @@ async function updatePlanSkill(args, uid) {
         );
       }
 
-      // 8. Write results to Firestore (batch write)
+      // 8. Delete old planned tasks to avoid duplicate/stale tasks
+      const oldTasksSnap = await db
+        .collection("users")
+        .doc(uid)
+        .collection("practiceTasks")
+        .where("status", "==", "planned")
+        .get();
+
+      // 9. Write results to Firestore (batch write)
       const batch = db.batch();
+
+      oldTasksSnap.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+
       const planId = generatePlanId();
       const userRef = db.collection("users").doc(uid);
 
@@ -421,7 +433,7 @@ async function updatePlanSkill(args, uid) {
   
 }
 
-exports.updatePlan = onCall({ cors: true, invoker: "public" }, async (request) => {
+exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"] }, async (request) => {
   const uid = request.auth ? request.auth.uid : "test_user_123";
   return updatePlanSkill(request.data, uid);
 });

@@ -23,6 +23,7 @@ dependencies:
   timezone: ^0.9.4
   youtube_player_flutter: ^10.0.1
   youtube_player_iframe: ^6.0.2
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:

@@ -473,6 +473,8 @@ class _FretwiseShellState extends State<FretwiseShell> {
           artist: props['artist'] as String? ?? 'Oasis',
           bpm: props['bpm'] as int? ?? 87,
           songId: props['songId'] as String? ?? '',
+          taskId: props['taskId'] as String?,
+          dayId: props['dayId'] as String?,
           onOpenAI: _openAI,
           practiceMaterial: aiService.currentMaterial,
         );
@@ -481,9 +483,12 @@ class _FretwiseShellState extends State<FretwiseShell> {
         return SessionCompleteScreen(
           t: t,
           navigate: _navigate,
-          title: props['title'] as String? ?? 'Wonderwall',
-          artist: props['artist'] as String? ?? 'Oasis',
+          title: props['title'] as String? ?? 'Unknown',
+          artist: props['artist'] as String? ?? 'Unknown',
           duration: props['duration'] as int? ?? 0,
+          songId: props['songId'] as String?,
+          taskId: props['taskId'] as String?,
+          dayId: props['dayId'] as String?,
           onOpenAI: _openAI,
           onSaveNote: (note) =>
               context.read<AppState>().updateLatestDiaryNote(note),

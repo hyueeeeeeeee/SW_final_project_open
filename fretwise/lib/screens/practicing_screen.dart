@@ -19,6 +19,8 @@ class PracticingScreen extends StatefulWidget {
   final VoidCallback onOpenAI;
 
   final String songId;
+  final String? taskId;
+  final String? dayId;
   final Map<String, dynamic>? practiceMaterial;
 
   const PracticingScreen({
@@ -29,6 +31,8 @@ class PracticingScreen extends StatefulWidget {
     required this.artist,
     required this.bpm,
     required this.songId,
+    this.taskId,
+    this.dayId,
     required this.onOpenAI,
     this.practiceMaterial,
   });
@@ -450,6 +454,9 @@ class _PracticingScreenState extends State<PracticingScreen> {
                           'title': widget.title,
                           'artist': widget.artist,
                           'duration': _seconds,
+                          'songId': widget.songId,
+                          'taskId': widget.taskId,
+                          'dayId': widget.dayId,
                         });
                       },
                       style: OutlinedButton.styleFrom(

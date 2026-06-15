@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../theme.dart';
 import '../widgets/album_art.dart';
 import '../widgets/section_header.dart';
@@ -153,7 +155,7 @@ class _CalendarScreenState extends State<CalendarScreen>
   Future<void> _manualSync() async {
     if (_isSyncing || _isUpdatingPlan) return;
     setState(() => _isSyncing = true);
-    await _fetchExternalCalendar();
+    await _fetchExternalCalendar(forceSync: true);
     if (mounted) setState(() => _isSyncing = false);
   }
 
@@ -161,15 +163,14 @@ class _CalendarScreenState extends State<CalendarScreen>
 
   // 1. 建立一個 Stream 來監聽 Firebase 中當月的 PracticeDay 資料
   Stream<List<Map<String, dynamic>>> _getPracticeDaysStream() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return Stream.value([]); // 如果未登入回傳空陣列
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
 
     // 將目前的年月轉為 YYYY-MM 格式，用來過濾當月資料
     final monthStr = '$_year-${_month.toString().padLeft(2, '0')}';
 
     return FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(uid)
         .collection('practiceDays')
         // 根據 shared_models.md，date 的格式是 YYYY-MM-DD
         .where('date', isGreaterThanOrEqualTo: '$monthStr-01')
@@ -179,38 +180,48 @@ class _CalendarScreenState extends State<CalendarScreen>
   }
 
   Stream<List<Map<String, dynamic>>> _getPracticeTasksStream() {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return Stream.value([]);
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
 
     final todayStr =
         '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
 
     return FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(uid)
         .collection('practiceTasks')
         .where('dayId', isGreaterThanOrEqualTo: todayStr)
         .orderBy('dayId')
         .orderBy('orderIndex')
         .snapshots()
-        .map((snapshot) => snapshot.docs.map((doc) => doc.data()).toList());
+        .map((snapshot) => snapshot.docs.map((doc) {
+              final data = doc.data();
+              data['id'] = doc.id;
+              return data;
+            }).toList());
   }
 
   // 讀取外部行事曆（未來 7 天）
-  Future<void> _fetchExternalCalendar() async {
+  Future<void> _fetchExternalCalendar({bool forceSync = false}) async {
+    bool hasPermission = false;
     var permissionsGranted = await _deviceCalendarPlugin.hasPermissions();
     if (permissionsGranted.isSuccess && !permissionsGranted.data!) {
       permissionsGranted = await _deviceCalendarPlugin.requestPermissions();
-      if (!permissionsGranted.isSuccess || !permissionsGranted.data!) {
-        print("使用者拒絕了行事曆權限");
-        return;
+      if (permissionsGranted.isSuccess && permissionsGranted.data!) {
+        hasPermission = true;
+      } else {
+        print("使用者拒絕了行事曆權限，將無法讀取真實行事曆。");
       }
+    } else if (permissionsGranted.isSuccess && permissionsGranted.data!) {
+      hasPermission = true;
     }
 
-    final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
-    if (!calendarsResult.isSuccess || calendarsResult.data == null) return;
-
-    final calendars = calendarsResult.data!;
+    List<dynamic> calendars = [];
+    if (hasPermission) {
+      final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
+      calendars = (calendarsResult.isSuccess && calendarsResult.data != null)
+          ? calendarsResult.data!
+          : [];
+    }
 
     final currentLocation = tz.getLocation('Asia/Taipei');
     final startDate = tz.TZDateTime.now(currentLocation);
@@ -259,6 +270,15 @@ class _CalendarScreenState extends State<CalendarScreen>
       });
     }
 
+    final prefs = await SharedPreferences.getInstance();
+    final currentEventsJson = jsonEncode(externalEvents);
+    final lastEventsJson = prefs.getString('last_calendar_events');
+
+    if (!forceSync && currentEventsJson == lastEventsJson) {
+      print("行事曆沒有變動，跳過 API 呼叫。");
+      return;
+    }
+
     print("準備傳送 ${externalEvents.length} 個外部行程給後端：");
     print(externalEvents);
 
@@ -303,7 +323,8 @@ class _CalendarScreenState extends State<CalendarScreen>
         setState(() => _updateProgress = 1.0);
         await Future.delayed(const Duration(milliseconds: 300));
         print("AI 排程成功更新！後端回傳：${result.data}");
-        // 後端應該把新計畫寫入 Firestore，UI 會經由 streams 自動更新
+        // 成功後將這次的行事曆資料儲存起來
+        await prefs.setString('last_calendar_events', currentEventsJson);
       }
     } catch (e) {
       if (!_cancelUpdateRequested) print("呼叫 AI API 失敗：$e");
@@ -430,6 +451,9 @@ class _CalendarScreenState extends State<CalendarScreen>
                     StreamBuilder<List<Map<String, dynamic>>>(
                       stream: _getPracticeTasksStream(),
                       builder: (context, snap) {
+                        if (snap.hasError) {
+                          print("Today's Plan Stream Error: \${snap.error}");
+                        }
                         final todayStr =
                             '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
                         if (!snap.hasData || snap.data!.isEmpty) {
@@ -477,9 +501,67 @@ class _CalendarScreenState extends State<CalendarScreen>
                         }
 
                         final tasks = snap.data!;
-                        final todays = tasks
+                        final todaysOriginal = tasks
                             .where((e) => (e['dayId'] as String) == todayStr)
                             .toList();
+                        final todays = todaysOriginal
+                            .where((e) => e['status'] != 'completed')
+                            .toList();
+
+                        if (todaysOriginal.isNotEmpty && todays.isEmpty) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: t.surface,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: t.border),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.06),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            padding: const EdgeInsets.all(20),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: t.accent.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Icon(Icons.check_circle_outline, color: t.accent),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "All done for today!",
+                                        style: TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.w700,
+                                          color: t.text,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        "Great job! See you tomorrow.",
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: t.textSec,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
                         final Map<String, dynamic> task = todays.isNotEmpty
                             ? todays.first
                             : tasks.first;
@@ -518,38 +600,44 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       radius: 14,
                                     ),
                                     const SizedBox(width: 14),
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          "Today's practice",
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            color: t.textMuted,
-                                            letterSpacing: 0.7,
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            (task['dayId'] == todayStr) ? "Today's practice" : "Next practice",
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: t.textMuted,
+                                              letterSpacing: 0.7,
+                                            ),
                                           ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          title,
-                                          style: TextStyle(
-                                            fontSize: 17,
-                                            fontWeight: FontWeight.w700,
-                                            color: t.text,
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 17,
+                                              fontWeight: FontWeight.w700,
+                                              color: t.text,
+                                            ),
                                           ),
-                                        ),
-                                        Text(
-                                          artist.isNotEmpty || bpm.isNotEmpty
-                                              ? '$artist${artist.isNotEmpty && bpm.isNotEmpty ? ' · ' : ''}$bpm${bpm.isNotEmpty ? ' BPM' : ''}'
-                                              : '',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: t.textSec,
+                                          Text(
+                                            artist.isNotEmpty || bpm.isNotEmpty
+                                                ? '$artist${artist.isNotEmpty && bpm.isNotEmpty ? ' · ' : ''}$bpm${bpm.isNotEmpty ? ' BPM' : ''}'
+                                                : '',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: t.textSec,
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -617,6 +705,9 @@ class _CalendarScreenState extends State<CalendarScreen>
                     StreamBuilder<List<Map<String, dynamic>>>(
                       stream: _getPracticeTasksStream(),
                       builder: (context, snap) {
+                        if (snap.hasError) {
+                          print("Coming Up Stream Error: \${snap.error}");
+                        }
                         final todayStr =
                             '$_year-${_month.toString().padLeft(2, '0')}-${_today.day.toString().padLeft(2, '0')}';
                         if (!snap.hasData || snap.data!.isEmpty) {
@@ -721,6 +812,8 @@ class _CalendarScreenState extends State<CalendarScreen>
                                     children: [
                                       Text(
                                         song,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w600,
@@ -730,6 +823,8 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       if (artist.isNotEmpty)
                                         Text(
                                           artist,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 12,
                                             color: t.textSec,
@@ -739,6 +834,8 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       if (desc.isNotEmpty)
                                         Text(
                                           desc,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 11,
                                             color: t.textMuted,
@@ -1201,32 +1298,38 @@ class _TodayDetailSheet extends StatelessWidget {
                   children: [
                     const AlbumArt(seed: 1, size: 56, radius: 16),
                     const SizedBox(width: 14),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          "Today's Practice",
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: t.textMuted,
-                            letterSpacing: 0.7,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "Today's Practice",
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: t.textMuted,
+                              letterSpacing: 0.7,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          task?['songTitle'] ?? task?['title'] ?? 'Practice',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: t.text,
+                          const SizedBox(height: 2),
+                          Text(
+                            task?['songTitle'] ?? task?['title'] ?? 'Practice',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: t.text,
+                            ),
                           ),
-                        ),
-                        Text(
-                          '${task?['artist'] ?? ''}${(task?['artist'] != null && task?['bpm'] != null) ? ' · ${task?['bpm']} BPM' : (task?['bpm'] != null ? '${task?['bpm']} BPM' : '')}',
-                          style: TextStyle(fontSize: 14, color: t.textSec),
-                        ),
-                      ],
+                          Text(
+                            '${task?['artist'] ?? ''}${(task?['artist'] != null && task?['bpm'] != null) ? ' · ${task?['bpm']} BPM' : (task?['bpm'] != null ? '${task?['bpm']} BPM' : '')}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 14, color: t.textSec),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -1340,6 +1443,9 @@ class _TodayDetailSheet extends StatelessWidget {
                           'title': task?['songTitle'] ?? task?['title'],
                           'artist': task?['artist'],
                           'bpm': task?['bpm'],
+                          'songId': task?['songId'],
+                          'taskId': task?['id'],
+                          'dayId': task?['dayId'],
                         },
                       );
                     },

@@ -11,6 +11,9 @@ class SessionCompleteScreen extends StatefulWidget {
   final String title;
   final String artist;
   final int duration;
+  final String? songId;
+  final String? taskId;
+  final String? dayId;
   final VoidCallback onOpenAI;
   final void Function(String note)? onSaveNote;
 
@@ -21,6 +24,9 @@ class SessionCompleteScreen extends StatefulWidget {
     required this.title,
     required this.artist,
     required this.duration,
+    this.songId,
+    this.taskId,
+    this.dayId,
     required this.onOpenAI,
     this.onSaveNote,
   });
@@ -39,7 +45,41 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
   bool _applyingPatch = false;
   bool _showAiModal = false;
 
+  Map<String, dynamic>? _nextTask;
+
   AppTheme get t => widget.t;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.dayId != null) {
+      _fetchNextTask();
+    }
+  }
+
+  Future<void> _fetchNextTask() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    final snap = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .collection('practiceTasks')
+        .where('dayId', isEqualTo: widget.dayId)
+        .where('status', isEqualTo: 'planned')
+        .orderBy('orderIndex')
+        .get();
+        
+    for (var doc in snap.docs) {
+      if (doc.id != widget.taskId) {
+        setState(() {
+          _nextTask = doc.data();
+          _nextTask!['id'] = doc.id;
+        });
+        break;
+      }
+    }
+  }
 
   String _fmt(int s) =>
       '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
@@ -52,13 +92,20 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
     super.dispose();
   }
 
-  // song id helper moved to lib/utils/song_id.dart
-
   Future<void> _handleSaveAndNavigate() async {
     widget.onSaveNote?.call(_feedbackCtrl.text.trim());
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
+        if (widget.taskId != null) {
+          await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .collection('practiceTasks')
+              .doc(widget.taskId)
+              .update({'status': 'completed'});
+        }
+
         final callable = FirebaseFunctions.instance.httpsCallable(
           'recordSession',
         );
@@ -122,7 +169,21 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
 
     // If the AI modal didn't open (user null, or Firebase error), go home directly
     if (!_showAiModal) {
-      widget.navigate('home');
+      if (_nextTask != null) {
+        widget.navigate(
+          'practicing',
+          props: {
+            'title': _nextTask!['songTitle'] ?? _nextTask!['title'],
+            'artist': _nextTask!['artist'],
+            'bpm': _nextTask!['bpm'],
+            'songId': _nextTask!['songId'],
+            'taskId': _nextTask!['id'],
+            'dayId': _nextTask!['dayId'],
+          },
+        );
+      } else {
+        widget.navigate('home');
+      }
     }
   }
 
@@ -781,7 +842,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                             });
                             widget.navigate('home');
                           },
-                          child: Text('Skip', style: TextStyle(color: t.text)),
+                          child: Text(_nextTask != null ? 'Go Home' : 'Skip', style: TextStyle(color: t.text)),
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
@@ -817,7 +878,21 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                                   }
                                   setState(() => _applyingPatch = false);
                                   setState(() => _showAiModal = false);
-                                  widget.navigate('home');
+                                  if (_nextTask != null) {
+                                    widget.navigate(
+                                      'practicing',
+                                      props: {
+                                        'title': _nextTask!['songTitle'] ?? _nextTask!['title'],
+                                        'artist': _nextTask!['artist'],
+                                        'bpm': _nextTask!['bpm'],
+                                        'songId': _nextTask!['songId'],
+                                        'taskId': _nextTask!['id'],
+                                        'dayId': _nextTask!['dayId'],
+                                      },
+                                    );
+                                  } else {
+                                    widget.navigate('home');
+                                  }
                                 },
                           child: _applyingPatch
                               ? const SizedBox(
@@ -827,7 +902,7 @@ class _SessionCompleteScreenState extends State<SessionCompleteScreen> {
                                     strokeWidth: 2,
                                   ),
                                 )
-                              : const Text('Apply Suggestions'),
+                              : Text(_nextTask != null ? 'Apply & Next Task' : 'Apply Suggestions'),
                         ),
                       ],
                     ),
