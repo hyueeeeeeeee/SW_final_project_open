@@ -1,0 +1,38 @@
+2026-06-15T18:01:37.314365Z ? chatwithcoach: [generateMaterial] existing materials count=2
+
+2026-06-15T18:01:41.105307Z ? chatwithcoach: [generateMaterial] Gemini suggests title="Perfect - Ed Sheeran Piano Tutorial" type="video"
+
+2026-06-15T18:01:41.778356Z ? chatwithcoach: [generateMaterial] YouTube URL found: https://www.youtube.com/watch?v=Gc4BXtlm8aM
+
+2026-06-15T18:01:41.985191Z ? chatwithcoach: [generateMaterial] ✅ batch committed — new material "Perfect - Ed Sheeran Piano Tutorial" written to Firestore
+
+2026-06-15T18:01:42.731361Z ? chatwithcoach: [chatWithCoach] round=1 functionCalls=undefined
+
+2026-06-15T18:01:45.664988Z I applypatch: 
+2026-06-15T18:01:45.679357Z W applypatch: Failed to validate AppCheck token. FirebaseAppCheckError: Decoding App Check token failed. Make sure you passed the entire string JWT which represents the Firebase App Check token.
+    at /workspace/node_modules/firebase-admin/lib/app-check/token-verifier.js:79:19
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {
+  errorInfo: {
+    code: 'app-check/invalid-argument',
+    message: 'Decoding App Check token failed. Make sure you passed the entire string JWT which represents the Firebase App Check token.'
+  },
+  codePrefix: 'app-check'
+}
+2026-06-15T18:01:45.679898Z W applypatch: {"message":"Callable request verification failed: AppCheck token was rejected.","verifications":{"auth":"MISSING","app":"INVALID"}}
+2026-06-15T18:01:45.680302Z W applypatch: Allowing request with invalid AppCheck token because enforcement is disabled
+2026-06-15T18:02:19.374065Z I chatwithcoach: 
+2026-06-15T18:02:19.388431Z W chatwithcoach: Failed to validate AppCheck token. FirebaseAppCheckError: Decoding App Check token failed. Make sure you passed the entire string JWT which represents the Firebase App Check token.
+    at /workspace/node_modules/firebase-admin/lib/app-check/token-verifier.js:79:19
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5) {
+  errorInfo: {
+    code: 'app-check/invalid-argument',
+    message: 'Decoding App Check token failed. Make sure you passed the entire string JWT which represents the Firebase App Check token.'
+  },
+  codePrefix: 'app-check'
+}
+2026-06-15T18:02:19.388607Z W chatwithcoach: {"verifications":{"app":"INVALID","auth":"MISSING"},"message":"Callable request verification failed: AppCheck token was rejected."}
+2026-06-15T18:02:19.388707Z W chatwithcoach: Allowing request with invalid AppCheck token because enforcement is disabled
+2026-06-15T18:02:19.389474Z ? chatwithcoach: [chatWithCoach] fromScreen=practicing activeSongTitle=Yellow activeSongArtist=Coldplay message="please give me a new tutorial video thx"
+
+2026-06-15T18:02:21.550663Z ? chatwithcoach: [chatWithCoach] round=0 functionCalls=[{"name":"generateMaterial","args":{"requestContext":"wants a new tutorial video","songTitle":"Yellow","songArtist":"Coldplay","preferredMaterialTypes":["video"]}}]
+

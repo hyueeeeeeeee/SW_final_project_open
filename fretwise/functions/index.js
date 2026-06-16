@@ -1,8 +1,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { setGlobalOptions } = require("firebase-functions/v2/options");
 const logger = require("firebase-functions/logger");
-const { VertexAI } = require("@google-cloud/vertexai");
 const admin = require("firebase-admin");
-const { FieldValue } = require("firebase-admin/firestore");
 const { GoogleGenerativeAI, SchemaType } = require("@google/generative-ai");
 
 admin.initializeApp();
@@ -17,61 +16,81 @@ function makeSongId(title, artist) {
 // 🛠️ 真實 YouTube 爬蟲 — returns the first non-duplicate result, or null if all exhausted.
 // Duration filtering and Shorts handling are driven by materialRules only when explicitly stated.
 async function getRealYouTubeVideo(songTitle, artist, excludeUrls = new Set(), materialRules = '') {
-  try {
-    const query = encodeURIComponent(`${songTitle} ${artist} 吉他教學 guitar tutorial`);
-    const rulesLower = materialRules.toLowerCase();
-    const wantsLong  = rulesLower.includes('long');
-    const wantsShort = rulesLower.includes('short');
+  const rulesLower = materialRules.toLowerCase();
+  const wantsLong  = rulesLower.includes('long');
+  const wantsShort = rulesLower.includes('short');
 
-    // Only apply a duration filter when the user explicitly says long or short
-    let durationParam = '';
-    if (wantsLong)  durationParam = '&sp=EgIYAg%3D%3D'; // >20 min
-    if (wantsShort) durationParam = '&sp=EgIYAQ%3D%3D'; // <4 min
+  // Only apply a duration filter when the user explicitly says long or short
+  let durationParam = '';
+  if (wantsLong)  durationParam = '&sp=EgIYAg%3D%3D'; // >20 min
+  if (wantsShort) durationParam = '&sp=EgIYAQ%3D%3D'; // <4 min
 
-    // User-Agent avoids basic bot-detection that Cloud Function IPs trigger on YouTube
-    const html = await fetch(
-      `https://www.youtube.com/results?search_query=${query}${durationParam}`,
-      {
+  // Relevance: a result is accepted only if every word of the song title appears
+  // as a whole token in the result title (so "Flowers" matches "Flowers (Miley
+  // Cyrus)" but NOT "Wildflowers"). YouTube serves an off-topic result set to
+  // datacenter IPs, and a random tutorial is worse than none — so we reject
+  // anything that isn't clearly about this song.
+  const tokenize = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const titleTokens = tokenize(songTitle);
+  const isRelevant = (title) => {
+    if (titleTokens.length === 0) return false;
+    const have = new Set(tokenize(title));
+    return titleTokens.every((tok) => have.has(tok));
+  };
+
+  // Try a few query formulations — the quoted-title variant biases YouTube
+  // toward results that actually contain the song name, and the localized
+  // params + consent cookie coax a full results page out of the datacenter IP.
+  const queries = [
+    `"${songTitle}" ${artist} guitar tutorial`,
+    `${songTitle} ${artist} 吉他教學 guitar lesson chords`,
+  ];
+
+  for (const q of queries) {
+    try {
+      const url =
+        `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}` +
+        `&hl=en&gl=US&persist_gl=1${durationParam}`;
+      const html = await fetch(url, {
         headers: {
+          // User-Agent + consent cookie avoid the bot-detection / consent
+          // interstitial that Cloud Function IPs otherwise trigger on YouTube.
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept-Language': 'en-US,en;q=0.9',
+          'Cookie': 'CONSENT=YES+1; SOCS=CAI',
         },
+      }).then((r) => r.text());
+
+      // Skip Shorts only when the user explicitly wants long-form video
+      const shortsIds = wantsLong
+        ? new Set([...html.matchAll(/\/shorts\/([a-zA-Z0-9_-]{11})/g)].map((m) => m[1]))
+        : new Set();
+
+      // Extract ranked results as {id, title} from videoRenderer entries (the
+      // real search results, in order). The (?:(?!"videoId":)[\s\S])*? guard
+      // keeps each captured title bound to the same renderer as its videoId.
+      const results = [];
+      const re = /"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"(?:(?!"videoId":)[\s\S])*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/g;
+      for (const m of html.matchAll(re)) results.push({ id: m[1], title: m[2] });
+
+      const relevant = results.filter((r) => isRelevant(r.title));
+      console.log(`[YouTube] query="${q}", results=${results.length}, ` +
+        `relevant=${relevant.length}, htmlLen=${html.length}, excludeCount=${excludeUrls.size}`);
+
+      for (const r of relevant) {
+        if (shortsIds.has(r.id)) continue;
+        const link = `https://www.youtube.com/watch?v=${r.id}`;
+        if (!excludeUrls.has(link)) {
+          console.log(`[YouTube] picked "${r.title}" (${r.id})`);
+          return link;
+        }
       }
-    ).then(r => r.text());
-
-    // Only collect Shorts IDs to skip when user explicitly wants long-form video
-    const shortsIds = wantsLong
-      ? new Set([...html.matchAll(/\/shorts\/([a-zA-Z0-9_-]{11})/g)].map(m => m[1]))
-      : new Set();
-
-    // Collect IDs from both watch?v= URLs and embedded ytInitialData JSON for robustness
-    const ids = new Set();
-    for (const [, id] of html.matchAll(/watch\?v=([a-zA-Z0-9_-]{11})/g)) ids.add(id);
-    for (const [, id] of html.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g)) ids.add(id);
-
-    console.log(`[YouTube] query="${songTitle} ${artist}", candidates=${ids.size}, excludeCount=${excludeUrls.size}`);
-
-    for (const id of ids) {
-      if (shortsIds.has(id)) continue;
-      const url = `https://www.youtube.com/watch?v=${id}`;
-      if (!excludeUrls.has(url)) return url;
+    } catch (error) {
+      console.error(`YouTube 搜尋失敗 (query="${q}"):`, error);
     }
-    console.warn(`[YouTube] all ${ids.size} candidates excluded`);
-  } catch (error) {
-    console.error("YouTube 搜尋失敗:", error);
   }
 
-  // Multiple fallbacks so one exhausted URL doesn't block all future generation
-  const fallbacks = [
-    "https://www.youtube.com/watch?v=mYpXn-P8y_4",
-    "https://www.youtube.com/watch?v=bx1Bh8ZvH84",
-    "https://www.youtube.com/watch?v=xkVNbOCXUIU",
-    "https://www.youtube.com/watch?v=QB7ACr7pUuE",
-    "https://www.youtube.com/watch?v=Kx7B-XvmFtE",
-  ];
-  for (const fb of fallbacks) {
-    if (!excludeUrls.has(fb)) return fb;
-  }
+  console.warn(`[YouTube] no relevant non-excluded result for "${songTitle}" by "${artist}"`);
   return null;
 }
 
@@ -360,29 +379,6 @@ Return ONLY a JSON object with no markdown:
     console.error('generateMaterial: batch write failed:', e);
     return { status: "ok", note: "Material found but could not be saved." };
   }
-}
-
-async function updatePlanSkill(args, uid) {
-  console.log(`[SKILL] updatePlan called! uid=${uid} args=${JSON.stringify(args)}`);
-
-  const db = admin.firestore();
-  const profilePatch = {};
-  if (args.preferredDayAndTime)     profilePatch.preferredDayAndTime     = args.preferredDayAndTime;
-  if (args.preferredSessionMinutes != null) profilePatch.preferredSessionMinutes = args.preferredSessionMinutes;
-  if (args.dayAndTimeRule)          profilePatch.DayAndTimeRule           = args.dayAndTimeRule;
-
-  if (Object.keys(profilePatch).length) {
-    try {
-      await db.collection('users').doc(uid).set({ profile: profilePatch }, { merge: true });
-    } catch (e) {
-      console.error('updatePlan Firestore write failed:', e);
-    }
-  }
-
-  return {
-    status: "ok",
-    note: "generateMaterial is not implemented yet (dummy was called). Tell the user their new practice material is being prepared.",
-  };
 }
 
 exports.generateMaterial = onCall({ cors: true, invoker: "public" }, async (request) => {
@@ -1012,18 +1008,37 @@ exports.chatWithCoach = onCall({ cors: true, invoker: "public", secrets: ["GEMIN
 // --- 巧君負責的功能 2: 更新 Feed (無限延伸 + 隨機版) ---
 // --- 修正後的 更新 Feed 功能 ---
 async function updateFeedSkill(args, uid) {
-  console.log(`[SKILL] updateFeed 執行中, uid=${uid}`);
+  console.log(`[SKILL] updateFeed 執行中, uid=${uid}, args=`, JSON.stringify(args));
 
   const db = admin.firestore();
-  const feedCol = db.collection('users').doc(uid).collection('feed');
+  const userRef = db.collection('users').doc(uid);
+  const feedCol = userRef.collection('feed');
 
   // 1. 讀取使用者的真實偏好 (從 Firestore 抓取)
-  const userSnap = await db.collection('users').doc(uid).get();
+  const userSnap = await userRef.get();
   const userData = userSnap.data() || {};
   const prefs = userData.preferences || {};
-  
-  const favoriteArtists = (prefs.favoriteArtists || []).join(', ') || "Popular artists";
-  const favoriteGenres = (prefs.favoriteGenres || []).join(', ') || "Pop, Rock";
+
+  // 1b. 把這次對話的口味更新寫回 preferences (likedGenres / likedArtists 等)
+  const a = args || {};
+  const mergeUnique = (existing, add) =>
+    Array.from(new Set([...(existing || []), ...(add || [])]));
+  const removeAll = (existing, remove) =>
+    (existing || []).filter((x) => !(remove || []).includes(x));
+
+  const newGenres = removeAll(mergeUnique(prefs.favoriteGenres, a.likedGenres), a.dislikedGenres);
+  const newArtists = removeAll(mergeUnique(prefs.favoriteArtists, a.likedArtists), a.dislikedArtists);
+
+  await userRef.set({
+    preferences: {
+      favoriteGenres: newGenres,
+      favoriteArtists: newArtists,
+      ...(a.tempoPreference ? { tempoPreference: a.tempoPreference } : {}),
+    },
+  }, { merge: true });
+
+  const favoriteArtists = newArtists.join(', ') || "Popular artists";
+  const favoriteGenres = newGenres.join(', ') || "Pop, Rock";
   const skillLevel = (userData.profile?.skillLevel) || "beginner";
 
   try {

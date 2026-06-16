@@ -61,7 +61,6 @@ class NotificationManager {
 
     _initialized = true;
     _requestIOSPermissions();
-    _requestAndroidPermissions();
     _listenToPracticeTasks();
   }
 
@@ -74,14 +73,6 @@ class NotificationManager {
           badge: true,
           sound: true,
         );
-  }
-
-  Future<void> _requestAndroidPermissions() async {
-    final androidImpl = _flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    // Android 13+ (API 33) requires runtime POST_NOTIFICATIONS permission.
-    await androidImpl?.requestNotificationsPermission();
   }
 
   void _listenToPracticeTasks() {
@@ -189,7 +180,7 @@ class NotificationManager {
       body,
       tzScheduledTime,
       platformChannelSpecifics,
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       payload: jsonEncode(payload),
