@@ -27,6 +27,7 @@ dependencies:
   permission_handler: ^12.0.3
   camera: ^0.12.0+1
   flutter_local_notifications: ^18.0.1
+  pull_down_button: ^0.10.2
 
 dev_dependencies:
   flutter_test:
