@@ -284,9 +284,13 @@ class _CalendarScreenState extends State<CalendarScreen>
 
         if (eventsResult.isSuccess && eventsResult.data != null) {
           for (var event in eventsResult.data!) {
+            final title = event.title ?? '忙碌行程';
+            
+            // 過濾掉我們先前寫入的 Fretwise 練習行程，避免 AI 以為這天很忙而取消練習
+            if (title.startsWith('[Fretwise]')) continue;
+            
             externalEvents.add({
-              // 3. 加上 ?? '忙碌行程'，如果 title 是空的，就給它一個預設名字
-              'title': event.title ?? '忙碌行程',
+              'title': title,
               'start': event.start?.toIso8601String(),
               'end': event.end?.toIso8601String(),
             });
@@ -360,8 +364,14 @@ class _CalendarScreenState extends State<CalendarScreen>
         setState(() => _updateProgress = 1.0);
         await Future.delayed(const Duration(milliseconds: 300));
         print("AI 排程成功更新！後端回傳：${result.data}");
+        
         // 成功後將這次的行事曆資料儲存起來
         await prefs.setString('last_calendar_events', currentEventsJson);
+        
+        // [新增] 將安排好的 practiceTasks 同步到手機內建行事曆
+        if (result.data['planId'] != null) {
+          await _syncTasksToNativeCalendar(result.data['planId']);
+        }
       }
     } catch (e) {
       if (!_cancelUpdateRequested) print("呼叫 AI API 失敗：$e");
@@ -380,6 +390,95 @@ class _CalendarScreenState extends State<CalendarScreen>
           _notifyLaterRequested = false;
         });
       }
+    }
+  }
+
+  Future<void> _syncTasksToNativeCalendar(String planId) async {
+    print("開始將 Fretwise 課表同步到內建行事曆...");
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      
+      final tasksSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('practiceTasks')
+          .where('planId', isEqualTo: planId)
+          .get();
+          
+      if (tasksSnap.docs.isEmpty) {
+        print("沒有找到對應的任務，跳過同步");
+        return;
+      }
+
+      // 取得日曆列表，尋找第一個可寫入的日曆
+      final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
+      if (!calendarsResult.isSuccess || calendarsResult.data == null) {
+        print("無法取得裝置行事曆");
+        return;
+      }
+      
+      final writableCalendars = calendarsResult.data!.where((c) => c.isReadOnly == false && c.id != null).toList();
+      if (writableCalendars.isEmpty) {
+        print("找不到可以寫入的行事曆");
+        return;
+      }
+      
+      // 預設寫入第一個可寫的日曆
+      final targetCalendar = writableCalendars.first;
+      print("將寫入目標日曆：\${targetCalendar.name}");
+      
+      final currentLocation = tz.getLocation('Asia/Taipei');
+      final startDate = tz.TZDateTime.now(currentLocation).subtract(const Duration(days: 1));
+      final endDate = startDate.add(const Duration(days: 35));
+
+      // 1. 先把舊的 [Fretwise] 行程清掉
+      final eventsResult = await _deviceCalendarPlugin.retrieveEvents(
+        targetCalendar.id,
+        RetrieveEventsParams(startDate: startDate, endDate: endDate),
+      );
+      
+      if (eventsResult.isSuccess && eventsResult.data != null) {
+        for (var event in eventsResult.data!) {
+          if ((event.title ?? '').startsWith('[Fretwise]')) {
+            await _deviceCalendarPlugin.deleteEvent(targetCalendar.id, event.eventId);
+          }
+        }
+      }
+      
+      // 2. 新增每個 task
+      int addedCount = 0;
+      for (var doc in tasksSnap.docs) {
+        final data = doc.data();
+        final title = data['title'] ?? 'Practice';
+        final minutes = data['minutes'] ?? 20;
+        final dayId = data['dayId'] as String; // YYYY-MM-DD
+        
+        final parts = dayId.split('-');
+        if (parts.length == 3) {
+          final year = int.parse(parts[0]);
+          final month = int.parse(parts[1]);
+          final day = int.parse(parts[2]);
+          
+          // 預設排在晚上 20:00
+          final taskStart = tz.TZDateTime(currentLocation, year, month, day, 20, 0);
+          final taskEnd = taskStart.add(Duration(minutes: minutes));
+          
+          final event = Event(
+            targetCalendar.id,
+            title: '[Fretwise] $title',
+            description: data['instructions'] ?? '',
+            start: taskStart,
+            end: taskEnd,
+          );
+          
+          final createResult = await _deviceCalendarPlugin.createOrUpdateEvent(event);
+          if (createResult?.isSuccess == true) addedCount++;
+        }
+      }
+      print("同步內建行事曆完成！共寫入 $addedCount 個行程");
+    } catch (e) {
+      print("同步內建行事曆失敗：$e");
     }
   }
 
