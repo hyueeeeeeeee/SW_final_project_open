@@ -262,7 +262,7 @@ class _CalendarScreenState extends State<CalendarScreen>
 
     final currentLocation = tz.getLocation('Asia/Taipei');
     final startDate = tz.TZDateTime.now(currentLocation);
-    final endDate = startDate.add(const Duration(days: 7));
+    final endDate = startDate.add(const Duration(days: 28));
 
     List<Map<String, dynamic>> externalEvents = [];
 
@@ -284,9 +284,13 @@ class _CalendarScreenState extends State<CalendarScreen>
 
         if (eventsResult.isSuccess && eventsResult.data != null) {
           for (var event in eventsResult.data!) {
+            final title = event.title ?? '忙碌行程';
+            
+            // 過濾掉我們先前寫入的 Fretwise 練習行程，避免 AI 以為這天很忙而取消練習
+            if (title.startsWith('[Fretwise]')) continue;
+            
             externalEvents.add({
-              // 3. 加上 ?? '忙碌行程'，如果 title 是空的，就給它一個預設名字
-              'title': event.title ?? '忙碌行程',
+              'title': title,
               'start': event.start?.toIso8601String(),
               'end': event.end?.toIso8601String(),
             });
@@ -360,8 +364,14 @@ class _CalendarScreenState extends State<CalendarScreen>
         setState(() => _updateProgress = 1.0);
         await Future.delayed(const Duration(milliseconds: 300));
         print("AI 排程成功更新！後端回傳：${result.data}");
+        
         // 成功後將這次的行事曆資料儲存起來
         await prefs.setString('last_calendar_events', currentEventsJson);
+        
+        // [新增] 將安排好的 practiceTasks 同步到手機內建行事曆
+        if (result.data['planId'] != null) {
+          await _syncTasksToNativeCalendar(result.data['planId']);
+        }
       }
     } catch (e) {
       if (!_cancelUpdateRequested) print("呼叫 AI API 失敗：$e");
@@ -380,6 +390,109 @@ class _CalendarScreenState extends State<CalendarScreen>
           _notifyLaterRequested = false;
         });
       }
+    }
+  }
+
+  Future<void> _syncTasksToNativeCalendar(String planId) async {
+    print("開始將 Fretwise 課表同步到內建行事曆...");
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
+      
+      print("正在從 Firestore 抓取本次產生的 Practice Tasks (planId: $planId)...");
+      // 因為後端剛寫入 Firestore，給它 1 秒的同步時間
+      await Future.delayed(const Duration(seconds: 1));
+      
+      final tasksSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('practiceTasks')
+          .where('planId', isEqualTo: planId)
+          .get();
+          
+      if (tasksSnap.docs.isEmpty) {
+        print("沒有找到對應的任務 (可能 Firestore 還沒同步過來)，跳過同步");
+        return;
+      }
+      print("成功抓到 \${tasksSnap.docs.length} 個任務，準備寫入日曆...");
+
+      // 取得日曆列表，尋找第一個可寫入的日曆
+      print("正在取得手機的日曆列表...");
+      final calendarsResult = await _deviceCalendarPlugin.retrieveCalendars();
+      if (!calendarsResult.isSuccess || calendarsResult.data == null) {
+        print("無法取得裝置行事曆");
+        return;
+      }
+      
+      final writableCalendars = calendarsResult.data!.where((c) => c.isReadOnly == false && c.id != null).toList();
+      if (writableCalendars.isEmpty) {
+        print("找不到可以寫入的行事曆");
+        return;
+      }
+      
+      // 預設寫入第一個可寫的日曆
+      final targetCalendar = writableCalendars.first;
+      print("將寫入目標日曆：\${targetCalendar.name} (ID: \${targetCalendar.id})");
+      
+      final currentLocation = tz.getLocation('Asia/Taipei');
+      final startDate = tz.TZDateTime.now(currentLocation).subtract(const Duration(days: 1));
+      final endDate = startDate.add(const Duration(days: 35));
+
+      // 1. 先把舊的 [Fretwise] 行程清掉
+      print("正在清理過去的 [Fretwise] 舊行程...");
+      final eventsResult = await _deviceCalendarPlugin.retrieveEvents(
+        targetCalendar.id,
+        RetrieveEventsParams(startDate: startDate, endDate: endDate),
+      );
+      
+      if (eventsResult.isSuccess && eventsResult.data != null) {
+        for (var event in eventsResult.data!) {
+          if ((event.title ?? '').startsWith('[Fretwise]')) {
+            await _deviceCalendarPlugin.deleteEvent(targetCalendar.id, event.eventId);
+          }
+        }
+      }
+      print("舊行程清理完畢。");
+      
+      // 2. 新增每個 task
+      print("開始逐一寫入新的練習行程...");
+      int addedCount = 0;
+      for (var i = 0; i < tasksSnap.docs.length; i++) {
+        final doc = tasksSnap.docs[i];
+        final data = doc.data();
+        final title = data['title'] ?? 'Practice';
+        final minutes = data['minutes'] ?? 20;
+        final dayId = data['dayId'] as String; // YYYY-MM-DD
+        
+        final parts = dayId.split('-');
+        if (parts.length == 3) {
+          final year = int.parse(parts[0]);
+          final month = int.parse(parts[1]);
+          final day = int.parse(parts[2]);
+          
+          // 預設排在晚上 20:00
+          final taskStart = tz.TZDateTime(currentLocation, year, month, day, 20, 0);
+          final taskEnd = taskStart.add(Duration(minutes: minutes));
+          
+          final event = Event(
+            targetCalendar.id,
+            title: '[Fretwise] $title',
+            description: data['instructions'] ?? '',
+            start: taskStart,
+            end: taskEnd,
+          );
+          
+          final createResult = await _deviceCalendarPlugin.createOrUpdateEvent(event);
+          if (createResult?.isSuccess == true) {
+            addedCount++;
+            print("  -> 成功寫入：\${dayId} 的 $title");
+          } else {
+            print("  -> 寫入失敗：\${dayId} (\${createResult?.errors.map((e) => e.errorMessage).join(', ')})");
+          }
+        }
+      }
+      print("同步內建行事曆完成！共寫入 $addedCount 個行程");
+    } catch (e) {
+      print("同步內建行事曆發生例外錯誤：$e");
     }
   }
 
@@ -517,18 +630,19 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       radius: 14,
                                     ),
                                     const SizedBox(width: 14),
-                                    Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          "No practice planned",
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            color: t.textMuted,
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            "No practice planned",
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: t.textMuted,
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -1119,7 +1233,9 @@ class _CalendarScreenState extends State<CalendarScreen>
                                       ? Colors.white
                                       : (bgColor == Colors.transparent
                                             ? t.text
-                                            : Colors.white);
+                                            : (bgColor == t.accent && !isToday 
+                                                ? t.accent 
+                                                : Colors.white));
                                   final border =
                                       bgColor != Colors.transparent && !isToday;
 

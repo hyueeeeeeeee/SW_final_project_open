@@ -1,4 +1,7 @@
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:pull_down_button/pull_down_button.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
 import '../models/song.dart';
@@ -255,65 +258,44 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             ),
                             if (!_filterArchived) ...[
                               const SizedBox(width: 8),
-                              _FilterChip(label: 'Sort', icon: Icons.sort, active: _showSort, t: t, onTap: () => setState(() => _showSort = !_showSort)),
+                              PullDownButton(
+                                itemBuilder: (context) => [
+                                  for (final opt in [
+                                    ('date', 'Date Practiced'),
+                                    ('progress', 'Progress'),
+                                    ('title', 'Title'),
+                                    ('artist', 'Artist'),
+                                  ])
+                                    PullDownMenuItem(
+                                      title: opt.$2,
+                                      icon: _sortBy == opt.$1 
+                                          ? (_sortAsc ? CupertinoIcons.arrow_up : CupertinoIcons.arrow_down)
+                                          : null,
+                                      iconColor: t.accent,
+                                      onTap: () {
+                                        setState(() {
+                                          if (_sortBy == opt.$1) {
+                                            _sortAsc = !_sortAsc;
+                                          } else {
+                                            _sortBy = opt.$1;
+                                            _sortAsc = opt.$1 == 'title' || opt.$1 == 'artist';
+                                          }
+                                        });
+                                      },
+                                    ),
+                                ],
+                                buttonBuilder: (context, showMenu) => _FilterChip(
+                                  label: 'Sort',
+                                  icon: Icons.sort,
+                                  active: false,
+                                  t: t,
+                                  onTap: showMenu,
+                                ),
+                              ),
                             ],
                           ],
                         ),
                       ),
-
-                      // Sort menu
-                      if (_showSort)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: t.surface,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: t.border),
-                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 30)],
-                            ),
-                            child: Column(
-                              children: [
-                                for (final opt in [('date', 'Date Practiced'), ('progress', 'Progress'), ('title', 'Title'), ('artist', 'Artist')])
-                                  GestureDetector(
-                                    onTap: () => setState(() {
-                                      if (_sortBy == opt.$1) {
-                                        _sortAsc = !_sortAsc;
-                                      } else {
-                                        _sortBy = opt.$1;
-                                        _sortAsc = opt.$1 == 'title' || opt.$1 == 'artist';
-                                      }
-                                    }),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-                                      decoration: BoxDecoration(
-                                        color: _sortBy == opt.$1 ? t.accentSoft : Colors.transparent,
-                                        border: Border(bottom: BorderSide(color: t.borderLight)),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                Text(
-                                                  opt.$2,
-                                                  style: TextStyle(fontSize: 14, color: _sortBy == opt.$1 ? t.accent : t.text, fontWeight: _sortBy == opt.$1 ? FontWeight.w700 : FontWeight.w400),
-                                                ),
-                                                if (_sortBy == opt.$1) Text(_sortDirectionLabel(opt.$1), style: TextStyle(fontSize: 11, color: t.accent)),
-                                              ],
-                                            ),
-                                          ),
-                                          if (_sortBy == opt.$1) Icon(_sortAsc ? Icons.arrow_upward : Icons.arrow_downward, size: 16, color: t.accent),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-
                       // Loading state from AI
                       if (appState.isLoadingAddSong)
                         Padding(
@@ -491,6 +473,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ],
     );
   }
+
 }
 
 class _FilterChip extends StatelessWidget {

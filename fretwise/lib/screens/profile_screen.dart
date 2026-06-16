@@ -149,16 +149,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Text('Guitar enthusiast · Level 7', style: TextStyle(fontSize: 13, color: t.textSec)),
                     const SizedBox(height: 16),
 
-                    // Stat badges
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _StatBadge(icon: Icons.local_fire_department, value: '12', label: 'Streak', color: AppColors.red, t: t),
-                        const SizedBox(width: 10),
-                        _StatBadge(icon: Icons.access_time, value: '48h', label: 'Practice', color: AppColors.accent, t: t),
-                        const SizedBox(width: 10),
-                        _StatBadge(emoji: '⭐', value: '${widget.coins}', label: 'Stars', t: t),
-                      ],
+                    // Stat progress bars & badges
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: Column(
+                        children: [
+                          _StatProgressBar(icon: Icons.local_fire_department, value: 12, max: 30, unit: '', label: 'Streak', color: AppColors.red, t: t),
+                          const SizedBox(height: 12),
+                          _StatProgressBar(icon: Icons.access_time, value: 48, max: 60, unit: 'h', label: 'Practice', color: AppColors.accent, t: t),
+                          const SizedBox(height: 12),
+                          _StatBadge(emoji: '⭐', value: '${widget.coins}', label: 'Stars', t: t),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -187,9 +189,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 width: 52, height: 52,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: t.surface,
-                                  border: Border.all(color: t.border, width: 1.5),
-                                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                                  gradient: const LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      Color(0xFFFFFFFF),
+                                      Color(0xFFE6E6E6),
+                                      Color(0xFFB3B3B3),
+                                      Color(0xFFE6E6E6),
+                                    ],
+                                    stops: [0.0, 0.4, 0.6, 1.0],
+                                  ),
+                                  border: Border.all(color: Colors.white, width: 2),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.25),
+                                      offset: const Offset(2, 4),
+                                      blurRadius: 6,
+                                    ),
+                                    BoxShadow(
+                                      color: Colors.white.withValues(alpha: 0.8),
+                                      offset: const Offset(-2, -2),
+                                      blurRadius: 4,
+                                    ),
+                                  ],
                                 ),
                                 child: Center(child: Text(a.$1, style: const TextStyle(fontSize: 24))),
                               ),
@@ -533,6 +556,63 @@ class _StatBadge extends StatelessWidget {
   }
 }
 
+class _StatProgressBar extends StatelessWidget {
+  final IconData icon;
+  final int value;
+  final int max;
+  final String unit;
+  final String label;
+  final Color color;
+  final AppTheme t;
+
+  const _StatProgressBar({
+    required this.icon,
+    required this.value,
+    required this.max,
+    required this.unit,
+    required this.label,
+    required this.color,
+    required this.t,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final double progress = (value / max).clamp(0.0, 1.0);
+    return Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: t.border),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 8),
+              Text(label, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: t.textSec)),
+              const Spacer(),
+              Text('$value$unit / $max$unit', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: t.text)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: t.borderLight,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ItemsPage extends StatelessWidget {
   final AppTheme t;
   final void Function(String screen, {Map<String, dynamic>? props}) navigate;
@@ -638,45 +718,84 @@ class _DiaryCard extends StatelessWidget {
   final List<String> songs;
   final String xp;
   final VoidCallback? onTap;
+  final bool isLast;
 
-  const _DiaryCard({required this.t, required this.date, required this.songs, required this.xp, this.onTap});
+  const _DiaryCard({required this.t, required this.date, required this.songs, required this.xp, this.onTap, this.isLast = false});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-      decoration: BoxDecoration(
-        color: t.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: t.border),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
-      ),
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(date, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: t.text)),
-              Text(xp, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: t.accent)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          for (final song in songs) ...[
-            Row(
+          // Timeline Node
+          SizedBox(
+            width: 24,
+            child: Column(
               children: [
-                Container(width: 4, height: 4, decoration: BoxDecoration(shape: BoxShape.circle, color: t.accent)),
-                const SizedBox(width: 7),
-                Expanded(child: Text(song, style: TextStyle(fontSize: 13, color: t.textSec))),
+                Container(
+                  width: 12, height: 12,
+                  margin: const EdgeInsets.only(top: 24),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: t.accent,
+                    border: Border.all(color: t.bg, width: 2),
+                  ),
+                ),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      color: t.border,
+                    ),
+                  ),
               ],
             ),
-            const SizedBox(height: 5),
-          ],
+          ),
+          const SizedBox(width: 12),
+          // Content
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: GestureDetector(
+                onTap: onTap,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: t.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: t.border),
+                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 4)],
+                  ),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(date, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: t.text)),
+                          Text(xp, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: t.accent)),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      for (final song in songs) ...[
+                        Row(
+                          children: [
+                            Container(width: 4, height: 4, decoration: BoxDecoration(shape: BoxShape.circle, color: t.accentMid)),
+                            const SizedBox(width: 7),
+                            Expanded(child: Text(song, style: TextStyle(fontSize: 13, color: t.textSec))),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
-    ),
     );
   }
 }

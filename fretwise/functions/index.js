@@ -491,8 +491,16 @@ async function updatePlanSkill(args, uid) {
     let text;
   try {
       // 2. Read user data from Firestore
-      const userDoc = await db.collection("users").doc(uid).get();
-      const userData = userDoc.exists ? userDoc.data() : {};
+      const userDocRef = db.collection("users").doc(uid);
+      const userDoc = await userDocRef.get();
+      let userData = userDoc.exists ? userDoc.data() : {};
+
+      // If the AI coach passed a requestContext, save it as DayAndTimeRule in Firestore
+      if (args.requestContext) {
+        userData.DayAndTimeRule = args.requestContext;
+        await userDocRef.set({ DayAndTimeRule: args.requestContext }, { merge: true });
+        logger.info("Updated DayAndTimeRule from coach requestContext", { rule: args.requestContext });
+      }
 
       const profile = userData.profile || {
         skillLevel: "beginner",
@@ -539,8 +547,8 @@ async function updatePlanSkill(args, uid) {
           weakTechniques: profile.weakTechniques || [],
           strongTechniques: profile.strongTechniques || [],
           preferredSessionMinutes: profile.preferredSessionMinutes || 20,
-          preferredDayAndTime: userData.preferredDayAndTime || profile.preferredDayAndTime || null,
-          dayAndTimeRule: userData.DayAndTimeRule || null,
+          preferredDayAndTime: userData.preferredDayAndTime || userData.preferedPracticeTime || userData.preferredPracticeTime || profile.preferredDayAndTime || null,
+          dayAndTimeRule: userData.DayAndTimeRule || userData.dayAndTimeRule || null,
         },
         preferences: {
           favoriteGenres: preferences.favoriteGenres || [],
@@ -564,10 +572,20 @@ async function updatePlanSkill(args, uid) {
       logger.info("AI input assembled", {
         songCount: songLibrary.length,
         hasExistingPlan: !!existingPlan,
+        preferredDayAndTime: aiInput.profile.preferredDayAndTime,
+        dayAndTimeRule: aiInput.profile.dayAndTimeRule,
+        externalEventsCount: externalCalendar.length,
       });
+
+      console.log("=== [AI Scheduling Criteria] ===");
+      console.log(`Preferred Practice Days: ${aiInput.profile.preferredDayAndTime || "None (Flexible)"}`);
+      console.log(`Day And Time Rule (Coach): ${aiInput.profile.dayAndTimeRule || "None"}`);
+      console.log(`External Calendar Events Found: ${externalCalendar.length} events in the next 28 days.`);
+      console.log("================================");
 
       // 6. Call Gemini AI via GoogleGenerativeAI
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      let text = "";
       const model = genAI.getGenerativeModel({
         model: "gemini-2.5-flash",
         generationConfig: {
@@ -582,7 +600,7 @@ async function updatePlanSkill(args, uid) {
       const userPrompt = `Here is the user's data. Generate a 4-week (28-day) practice plan based on this information.
 
 CRITICAL CONSTRAINTS:
-1. DO NOT schedule ANY practice on days that conflict heavily with the 'externalCalendar' events. If a day has many busy events on 'preferredDayAndTime', CANCEL the practice for that day completely (schedule 0 minutes).
+1. DO NOT schedule ANY practice on dates that appear in the 'externalCalendar'. If a date has EVEN ONE external event, you MUST CANCEL the practice for that ENTIRE DAY (schedule 0 minutes).
 2. STRICTLY follow the 'dayAndTimeRule' string. If the user explicitly asks to skip a certain date (e.g., "skip June 21, 2026"), you MUST NOT schedule any practice on that date (0 minutes).
 3. The generated plan must cover exactly 28 days starting from 'today'.
 4. VERY IMPORTANT: You have a strict output token limit. Keep all text fields (like "instructions" and "summary") EXTREMELY short (1-2 sentences max). Limit the number of tasks per day to at most 2-3 to ensure the entire 28-day JSON plan fits in the response without being truncated.
@@ -596,6 +614,9 @@ User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
       logger.info("Calling Gemini AI...");
       const result = await model.generateContent(userPrompt);
       const response = result.response;
+      if (!response || !response.candidates || response.candidates.length === 0) {
+        throw new Error("Gemini returned empty or invalid response object");
+      }
       text = response.candidates[0].content.parts[0].text;
 
       logger.info("Gemini AI response received", {
@@ -722,19 +743,41 @@ User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
         tasksCount: tasksArr.length,
       });
 
+      console.log("=== [AI Generated Schedule Output] ===");
+      console.log(`Plan Name: ${planObj.title || "Unknown"}`);
+      console.log(`Total Days: ${daysArr.length}`);
+      daysArr.forEach(day => {
+        const tasksForDay = tasksArr.filter(t => t.dayId === day.date);
+        if (tasksForDay.length > 0) {
+          console.log(`- Day ${day.date}: ${tasksForDay.length} tasks scheduled.`);
+          tasksForDay.forEach(t => {
+            console.log(`  -> ${t.title} (${t.minutes} mins)`);
+          });
+        } else {
+          console.log(`- Day ${day.date}: 0 tasks (Skipped)`);
+        }
+      });
+      console.log("======================================");
+
       return {
         success: true,
         planId,
         message: `Practice plan "${planObj.title || "Unknown"}" created with ${tasksArr.length} tasks over ${daysArr.length} days.`,
       };
     } catch (err) {
-      logger.error("updatePlan failed", { error: err.message, stack: err.stack, responseText: typeof text !== 'undefined' ? text : null });
-      throw new HttpsError("aborted", err.message === "Unexpected end of JSON input" || err instanceof SyntaxError ? "AI returned invalid JSON. End of string: " + (typeof text !== 'undefined' ? text.substring(Math.max(0, text.length - 500)) : 'undefined') : err.message);
+      const responseText = typeof text !== 'undefined' ? text : null;
+      let errorDetails = err.message || String(err);
+      if (err instanceof SyntaxError || err.message === "Unexpected end of JSON input" || err.message.includes("JSON")) {
+          const tail = responseText ? responseText.substring(Math.max(0, responseText.length - 500)) : 'No text generated';
+          errorDetails = "AI returned invalid JSON. Tail: " + tail;
+      }
+      logger.error("updatePlan failed", { error: errorDetails, stack: err.stack, responseText });
+      throw new HttpsError("aborted", errorDetails);
     }
   
 }
 
-exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"], timeoutSeconds: 300 }, async (request) => {
+exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"], timeoutSeconds: 300, memory: "512Mi" }, async (request) => {
   const uid = request.auth ? request.auth.uid : "test_user_123";
   return updatePlanSkill(request.data, uid);
 });
@@ -1123,7 +1166,7 @@ async function updateFeedSkill(args, uid) {
   }
 }
 
-exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120, secrets: ["GEMINI_API_KEY"] }, async (request) => {
+exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120, memory: "512Mi", secrets: ["GEMINI_API_KEY"] }, async (request) => {
     const uid = request.auth ? request.auth.uid : "test_user_123";
     return updateFeedSkill(request.data, uid);
   });
