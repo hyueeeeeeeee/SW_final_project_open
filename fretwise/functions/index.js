@@ -280,6 +280,7 @@ async function updatePlanSkill(args, uid) {
 
       // 6. Call Gemini AI via GoogleGenerativeAI
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+      let text = "";
       const model = genAI.getGenerativeModel({
         model: "gemini-2.5-flash",
         generationConfig: {
@@ -308,6 +309,9 @@ User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
       logger.info("Calling Gemini AI...");
       const result = await model.generateContent(userPrompt);
       const response = result.response;
+      if (!response || !response.candidates || response.candidates.length === 0) {
+        throw new Error("Gemini returned empty or invalid response object");
+      }
       text = response.candidates[0].content.parts[0].text;
 
       logger.info("Gemini AI response received", {
@@ -440,13 +444,19 @@ User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
         message: `Practice plan "${planObj.title || "Unknown"}" created with ${tasksArr.length} tasks over ${daysArr.length} days.`,
       };
     } catch (err) {
-      logger.error("updatePlan failed", { error: err.message, stack: err.stack, responseText: typeof text !== 'undefined' ? text : null });
-      throw new HttpsError("aborted", err.message === "Unexpected end of JSON input" || err instanceof SyntaxError ? "AI returned invalid JSON. End of string: " + (typeof text !== 'undefined' ? text.substring(Math.max(0, text.length - 500)) : 'undefined') : err.message);
+      const responseText = typeof text !== 'undefined' ? text : null;
+      let errorDetails = err.message;
+      if (err instanceof SyntaxError || err.message === "Unexpected end of JSON input" || err.message.includes("JSON")) {
+          const tail = responseText ? responseText.substring(Math.max(0, responseText.length - 500)) : 'No text generated';
+          errorDetails = "AI returned invalid JSON. Tail: " + tail;
+      }
+      logger.error("updatePlan failed", { error: err.message, stack: err.stack, responseText });
+      throw new HttpsError("aborted", errorDetails);
     }
   
 }
 
-exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"], timeoutSeconds: 300 }, async (request) => {
+exports.updatePlan = onCall({ cors: true, invoker: "public", region: "asia-east1", secrets: ["GEMINI_API_KEY"], timeoutSeconds: 300, memory: "512Mi" }, async (request) => {
   const uid = request.auth ? request.auth.uid : "test_user_123";
   return updatePlanSkill(request.data, uid);
 });
@@ -769,12 +779,12 @@ async function updateFeedSkill(args, uid) {
 
       return { success: true };
     } catch (error) {
-      logger.error("Error generating feed:", error);
+      console.error("Error generating feed:", error.message);
       throw new HttpsError("internal", error.message || "Unknown error occurred");
     }
 }
 
-exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120, secrets: ["GEMINI_API_KEY"] }, async (request) => {
+exports.updateFeed = onCall({ cors: true, invoker: "public", timeoutSeconds: 120, memory: "512Mi", secrets: ["GEMINI_API_KEY"] }, async (request) => {
     const uid = request.auth ? request.auth.uid : "test_user_123";
     return updateFeedSkill(request.data, uid);
   });
