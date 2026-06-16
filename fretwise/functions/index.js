@@ -284,7 +284,16 @@ async function updatePlanSkill(args, uid) {
       logger.info("AI input assembled", {
         songCount: songLibrary.length,
         hasExistingPlan: !!existingPlan,
+        preferredDayAndTime: aiInput.profile.preferredDayAndTime,
+        dayAndTimeRule: aiInput.profile.dayAndTimeRule,
+        externalEventsCount: externalCalendar.length,
       });
+
+      console.log("=== [AI Scheduling Criteria] ===");
+      console.log(`Preferred Practice Days: ${aiInput.profile.preferredDayAndTime || "None (Flexible)"}`);
+      console.log(`Day And Time Rule (Coach): ${aiInput.profile.dayAndTimeRule || "None"}`);
+      console.log(`External Calendar Events Found: ${externalCalendar.length} events in the next 28 days.`);
+      console.log("================================");
 
       // 6. Call Gemini AI via GoogleGenerativeAI
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -445,6 +454,22 @@ User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
         daysCount: daysArr.length,
         tasksCount: tasksArr.length,
       });
+
+      console.log("=== [AI Generated Schedule Output] ===");
+      console.log(`Plan Name: ${planObj.title || "Unknown"}`);
+      console.log(`Total Days: ${daysArr.length}`);
+      daysArr.forEach(day => {
+        const tasksForDay = tasksArr.filter(t => t.dayId === day.dayId);
+        if (tasksForDay.length > 0) {
+          console.log(`- Day ${day.dayId}: ${tasksForDay.length} tasks scheduled.`);
+          tasksForDay.forEach(t => {
+            console.log(`  -> ${t.title} (${t.minutes} mins)`);
+          });
+        } else {
+          console.log(`- Day ${day.dayId}: 0 tasks (Skipped)`);
+        }
+      });
+      console.log("======================================");
 
       return {
         success: true,
