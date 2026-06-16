@@ -396,11 +396,7 @@ class _CalendarScreenState extends State<CalendarScreen>
   Future<void> _syncTasksToNativeCalendar(String planId) async {
     print("開始將 Fretwise 課表同步到內建行事曆...");
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) {
-        print("使用者未登入，無法同步");
-        return;
-      }
+      final uid = FirebaseAuth.instance.currentUser?.uid ?? 'test_user_123';
       
       print("正在從 Firestore 抓取本次產生的 Practice Tasks (planId: $planId)...");
       // 因為後端剛寫入 Firestore，給它 1 秒的同步時間
@@ -408,7 +404,7 @@ class _CalendarScreenState extends State<CalendarScreen>
       
       final tasksSnap = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(uid)
           .collection('practiceTasks')
           .where('planId', isEqualTo: planId)
           .get();
