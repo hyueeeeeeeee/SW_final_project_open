@@ -251,8 +251,8 @@ async function updatePlanSkill(args, uid) {
           weakTechniques: profile.weakTechniques || [],
           strongTechniques: profile.strongTechniques || [],
           preferredSessionMinutes: profile.preferredSessionMinutes || 20,
-          preferredDayAndTime: userData.preferredDayAndTime || profile.preferredDayAndTime || null,
-          dayAndTimeRule: userData.DayAndTimeRule || null,
+          preferredDayAndTime: userData.preferredDayAndTime || userData.preferedPracticeTime || userData.preferredPracticeTime || profile.preferredDayAndTime || null,
+          dayAndTimeRule: userData.DayAndTimeRule || userData.dayAndTimeRule || null,
         },
         preferences: {
           favoriteGenres: preferences.favoriteGenres || [],
@@ -295,7 +295,7 @@ async function updatePlanSkill(args, uid) {
       const userPrompt = `Here is the user's data. Generate a 4-week (28-day) practice plan based on this information.
 
 CRITICAL CONSTRAINTS:
-1. DO NOT schedule ANY practice on days that conflict heavily with the 'externalCalendar' events. If a day has many busy events on 'preferredDayAndTime', CANCEL the practice for that day completely (schedule 0 minutes).
+1. DO NOT schedule ANY practice on dates that appear in the 'externalCalendar'. If a date has EVEN ONE external event, you MUST CANCEL the practice for that ENTIRE DAY (schedule 0 minutes).
 2. STRICTLY follow the 'dayAndTimeRule' string. If the user explicitly asks to skip a certain date (e.g., "skip June 21, 2026"), you MUST NOT schedule any practice on that date (0 minutes).
 3. The generated plan must cover exactly 28 days starting from 'today'.
 4. VERY IMPORTANT: You have a strict output token limit. Keep all text fields (like "instructions" and "summary") EXTREMELY short (1-2 sentences max). Limit the number of tasks per day to at most 2-3 to ensure the entire 28-day JSON plan fits in the response without being truncated.
@@ -445,12 +445,12 @@ User Data:\n\n${JSON.stringify(aiInput, null, 2)}`;
       };
     } catch (err) {
       const responseText = typeof text !== 'undefined' ? text : null;
-      let errorDetails = err.message;
+      let errorDetails = err.message || String(err);
       if (err instanceof SyntaxError || err.message === "Unexpected end of JSON input" || err.message.includes("JSON")) {
           const tail = responseText ? responseText.substring(Math.max(0, responseText.length - 500)) : 'No text generated';
           errorDetails = "AI returned invalid JSON. Tail: " + tail;
       }
-      logger.error("updatePlan failed", { error: err.message, stack: err.stack, responseText });
+      logger.error("updatePlan failed", { error: errorDetails, stack: err.stack, responseText });
       throw new HttpsError("aborted", errorDetails);
     }
   

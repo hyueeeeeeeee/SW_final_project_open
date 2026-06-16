@@ -262,7 +262,7 @@ class _CalendarScreenState extends State<CalendarScreen>
 
     final currentLocation = tz.getLocation('Asia/Taipei');
     final startDate = tz.TZDateTime.now(currentLocation);
-    final endDate = startDate.add(const Duration(days: 7));
+    final endDate = startDate.add(const Duration(days: 28));
 
     List<Map<String, dynamic>> externalEvents = [];
 
